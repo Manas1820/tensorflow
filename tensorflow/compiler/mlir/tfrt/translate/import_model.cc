@@ -43,7 +43,6 @@ limitations under the License.
 #include "tensorflow/compiler/mlir/tensorflow/transforms/host_runtime/lower_cluster_to_runtime_ops.h"
 #include "tensorflow/compiler/mlir/tensorflow/transforms/passes.h"
 #include "tensorflow/compiler/mlir/tensorflow/transforms/tf_saved_model_asset_sinking_pass.h"
-#include "tensorflow/compiler/mlir/tensorflow/translate/export_graphdef.h"
 #include "tensorflow/compiler/mlir/tensorflow/translate/import_model.h"
 #include "tensorflow/compiler/mlir/tensorflow/translate/mlir_roundtrip_flags.h"
 #include "tensorflow/compiler/mlir/tensorflow/utils/dump_mlir_util.h"
@@ -349,7 +348,7 @@ std::unique_ptr<tensorflow::TfrtPipelineOptions> GetTfrtPipelineOptions(
   pipeline_options->cost_threshold = options.cost_threshold;
   pipeline_options->min_num_batch_threads = options.min_num_batch_threads;
   pipeline_options->min_max_enqueued_batches = options.min_max_enqueued_batches;
-
+  pipeline_options->batch_padding_policy = options.batch_padding_policy;
   pipeline_options->merge_inter_dependent_streams =
       options.merge_inter_dependent_streams;
 

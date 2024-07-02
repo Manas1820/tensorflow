@@ -535,21 +535,21 @@ class Delegate {
 
     // If no weight cache is provided, add one when requested.
     if (!options_.weights_cache) {
-      if (options_.experimental_weight_cache_file_path) {
+      if (options_.weight_cache_file_path) {
         if (weight_cache_provider_.LoadOrStartBuild(
-                options_.experimental_weight_cache_file_path)) {
+                options_.weight_cache_file_path)) {
           options_.weights_cache =
               reinterpret_cast<TfLiteXNNPackDelegateWeightsCache*>(
                   weight_cache_provider_.GetCacheProvider().context);
-          options_.experimental_weight_cache_file_path =
+          options_.weight_cache_file_path =
               weight_cache_provider_.GetFilePath().data();
         } else {
           TFLITE_LOG_PROD(tflite::TFLITE_LOG_ERROR,
                           "XNNPack weight cache could neither be loaded from "
                           "or saved to '%s'. Check that this location is "
                           "readable and writable.",
-                          options_.experimental_weight_cache_file_path);
-          options_.experimental_weight_cache_file_path = nullptr;
+                          options_.weight_cache_file_path);
+          options_.weight_cache_file_path = nullptr;
         }
       } else {
         TFLITE_LOG(tflite::TFLITE_LOG_VERBOSE,
@@ -4213,6 +4213,27 @@ class Subgraph {
         logging_context, node_index, fc_params->activation, &output_min,
         &output_max));
 
+    uint32_t dq_quantized_id = XNN_INVALID_VALUE_ID;
+    size_t num_nonbatch_dims = 0;
+    int ic = 1;
+    int input_dims_remaining = NumDimensions(&input_tensor) - 1;
+    // Which input dimensions are part of input_channels.
+    if (dynamically_quantized) {
+      while (ic != input_channels && input_dims_remaining >= 0) {
+        ic *= input_tensor.dims->data[input_dims_remaining];
+        --input_dims_remaining;
+        ++num_nonbatch_dims;
+      }
+      if (ic != input_channels) {
+        TF_LITE_MAYBE_KERNEL_LOG(
+            logging_context,
+            "Could not determine how many input dimensions to use for "
+            "input_channels: %s node #%d",
+            EnumNameBuiltinOperator(BuiltinOperator_FULLY_CONNECTED),
+            node_index);
+        return kTfLiteError;
+      }
+    }
     if (subgraph != nullptr) {
       if (dynamically_quantized) {
         TfLiteAffineQuantization* filter_params =
@@ -4229,24 +4250,6 @@ class Subgraph {
             filter_params->zero_point->data[i] =
                 filter_tensor.params.zero_point;
           }
-        }
-        uint32_t dq_quantized_id = XNN_INVALID_VALUE_ID;
-        size_t num_nonbatch_dims = 0;
-        int ic = 1;
-        int input_dims_remaining = NumDimensions(&input_tensor) - 1;
-        // Which input dimensions are part of input_channels.
-        while (ic != input_channels && input_dims_remaining >= 0) {
-          ic *= input_tensor.dims->data[input_dims_remaining];
-          --input_dims_remaining;
-          ++num_nonbatch_dims;
-        }
-        if (ic != input_channels) {
-          TF_LITE_KERNEL_LOG(
-              logging_context,
-              "Could not determine how many input dimensions to use for "
-              "input_channels: %s node #%d",
-              EnumNameBuiltinOperator(BuiltinOperator_FULLY_CONNECTED),
-              node_index);
         }
         std::vector<size_t> input_dims(
             &input_tensor.dims->data[0],
@@ -4773,9 +4776,6 @@ class Subgraph {
     TF_LITE_ENSURE_STATUS(
         CheckTensorFloat32OrQUInt8Type(delegate, logging_context, input_tensor,
                                        node->inputs->data[0], node_index));
-    TF_LITE_ENSURE_STATUS(CheckTensorShape(logging_context, input_tensor, 4,
-                                           node->inputs->data[0],
-                                           BuiltinOperator_MEAN, node_index));
     TF_LITE_ENSURE_STATUS(
         CheckTensorNonDynamicAllocation(delegate, logging_context, input_tensor,
                                         node->inputs->data[0], node_index));
@@ -4796,6 +4796,10 @@ class Subgraph {
     bool all_reductions_supported = false;
     if (input_tensor.type == kTfLiteFloat32) {
       all_reductions_supported = true;
+    } else {
+      TF_LITE_ENSURE_STATUS(CheckTensorShape(logging_context, input_tensor, 4,
+                                             node->inputs->data[0],
+                                             BuiltinOperator_MEAN, node_index));
     }
     const TfLiteTensor& output_tensor = tensors[node->outputs->data[0]];
     TF_LITE_ENSURE_STATUS(

@@ -16,6 +16,16 @@ limitations under the License.
 #ifndef XLA_HLO_EVALUATOR_HLO_EVALUATOR_H_
 #define XLA_HLO_EVALUATOR_HLO_EVALUATOR_H_
 
+#include "absl/log/check.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "Eigen/Core"  // from @eigen_archive
+#include "xla/comparison_util.h"
+#include "xla/hlo/ir/dfs_hlo_visitor.h"
+#include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/shape.h"
+#include "xla/status_macros.h"
+#include "tsl/platform/errors.h"
 #define _USE_MATH_DEFINES
 
 #include <functional>
@@ -247,6 +257,8 @@ class HloEvaluator : public ConstDfsHloVisitorWithDefault {
       const Array2D<std::complex<double>>& rhs);
   static std::unique_ptr<Array2D<int32_t>> MatmulArray2D(
       const Array2D<int32_t>& lhs, const Array2D<int32_t>& rhs);
+  static std::unique_ptr<Array2D<uint8_t>> MatmulArray2D(
+      const Array2D<uint8_t>& lhs, const Array2D<uint8_t>& rhs);
 
  protected:
   // Evaluates the given instruction, and stores the evaluation result in the

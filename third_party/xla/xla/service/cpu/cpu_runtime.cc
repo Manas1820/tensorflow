@@ -49,7 +49,6 @@ limitations under the License.
 #include "xla/service/global_device_id.h"
 #include "xla/service/hlo_parser.h"
 #include "xla/shape_util.h"
-#include "xla/statusor.h"
 #include "xla/stream_executor/device_memory.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/util.h"
@@ -119,6 +118,8 @@ extern const char* const kEigenSingleThreadedMatMulC128SymbolName =
     "__xla_cpu_runtime_EigenSingleThreadedMatMulC128";
 extern const char* const kEigenSingleThreadedMatMulS32SymbolName =
     "__xla_cpu_runtime_EigenSingleThreadedMatMulS32";
+extern const char* const kEigenSingleThreadedMatMulU8SymbolName =
+    "__xla_cpu_runtime_EigenSingleThreadedMatMulU8";
 extern const char* const kEigenSingleThreadedConv2DF16SymbolName =
     "__xla_cpu_runtime_EigenSingleThreadedConv2DF16";
 extern const char* const kEigenSingleThreadedConv2DF32SymbolName =
@@ -164,6 +165,8 @@ extern const char* const kOneDnnSoftmaxSymbolName =
     "__xla_cpu_runtime_OneDnnSoftmax";
 extern const char* const kOneDnnLayerNormSymbolName =
     "__xla_cpu_runtime_OneDnnLayerNorm";
+extern const char* const kOneDnnConvolutionSymbolName =
+    "__xla_cpu_runtime_OneDnnConvolution";
 extern const char* const kOneDnnMatMulReorderSymbolName =
     "__xla_cpu_runtime_OneDnnMatMulReorder";
 extern const char* const kHandleFfiCallSymbolName =

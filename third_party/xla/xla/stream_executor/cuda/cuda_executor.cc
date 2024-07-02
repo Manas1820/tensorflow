@@ -147,22 +147,6 @@ absl::Status GpuExecutor::Init() {
   return absl::OkStatus();
 }
 
-// Returns the path to the running executable.
-// N.B. Derived from //knowledge/smalltalk/background_kb.cc
-// Arg: strip_exe: if true, remove the name of the executable itself from the
-//                 returned string. Example: calling this from /usr/bin/foo
-//                 would return /usr/bin.
-static std::string GetBinaryDir(bool strip_exe) {
-  std::string exe_path = tsl::Env::Default()->GetExecutablePath();
-  if (strip_exe) {
-    // The exe is the last component of the path, so remove one component.
-    std::vector<std::string> components = absl::StrSplit(exe_path, '/');
-    components.pop_back();
-    return absl::StrJoin(components, "/");
-  }
-  return exe_path;
-}
-
 absl::Status GpuExecutor::LoadModuleFromCuBin(const char* cubin,
                                               CUmodule* module) {
   uint64_t module_refcount;
@@ -465,20 +449,6 @@ absl::Status GpuExecutor::Launch(Stream* stream, const ThreadDim& thread_dims,
   const GpuKernel* cuda_kernel = AsGpuKernel(&kernel);
   CUfunction cufunc = cuda_kernel->AsGpuFunctionHandle();
 
-  // Only perform/print the occupancy check once.  Even just checking to see
-  // whether we've done an occupancy check on this kernel before isn't free
-  // (because we have to synchronize), so we only do this at -v 2+.
-  if (VLOG_IS_ON(2)) {
-    absl::MutexLock lock(&launched_kernels_mu_);
-    if (!launched_kernels_.count(cufunc)) {
-      VlogOccupancyInfo(stream->parent()->GetDeviceDescription(), kernel,
-                        thread_dims, block_dims);
-      // TODO(rspringer): Remove elements from launched_kernels_...if we ever
-      // expose a kernel/module deallocation method.
-      launched_kernels_.insert(cufunc);
-    }
-  }
-
   if (cuda_kernel->cache_config() != KernelCacheConfig::kNoPreference) {
     TF_RETURN_IF_ERROR(GpuDriver::FuncSetCacheConfig(
         cufunc, cuda_kernel->GetGpuCacheConfig()));
@@ -547,82 +517,6 @@ absl::Status GpuExecutor::Submit(Stream* stream,
   return GpuDriver::GraphLaunch(exec, AsGpuStreamValue(stream));
 }
 
-// This is a non-essential operation; if there's a failure, proceed without
-// logging an error. It's nearly certain that in case of failures, we'd never
-// get here in the first place; these are very low-impact routines.
-void GpuExecutor::VlogOccupancyInfo(const DeviceDescription& device_description,
-                                    const Kernel& kernel,
-                                    const ThreadDim& thread_dims,
-                                    const BlockDim& block_dims) {
-  VLOG(2) << "Computing kernel occupancy for kernel "
-          << kernel.demangled_name();
-  VLOG(2) << "Thread dimensions (" << thread_dims.x << ", " << thread_dims.y
-          << ", " << thread_dims.z << ")";
-
-  auto regs_per_thread = kernel.metadata().registers_per_thread();
-  auto smem_per_block = kernel.metadata().shared_memory_bytes();
-
-  if (!regs_per_thread && !smem_per_block) {
-    return;
-  }
-
-  const GpuKernel* cuda_kernel = AsGpuKernel(&kernel);
-  CUfunction cufunc = cuda_kernel->AsGpuFunctionHandle();
-
-  int blocks_per_sm = CalculateOccupancy(device_description, *regs_per_thread,
-                                         *smem_per_block, thread_dims, cufunc);
-  VLOG(2) << "Resident blocks per SM is " << blocks_per_sm;
-
-  int suggested_threads =
-      CompareOccupancy(&blocks_per_sm, device_description, *regs_per_thread,
-                       *smem_per_block, thread_dims, cufunc);
-  if (suggested_threads != 0) {
-    VLOG(2) << "The cuda occupancy calculator recommends using "
-            << suggested_threads
-            << " threads per block to achieve an occupancy of " << blocks_per_sm
-            << " blocks per SM.";
-  }
-}
-
-// Compute and return maximum blocks per core (occupancy) based on the
-// device description, some kernel characteristics and the number of threads per
-// block.  If unable to compute occupancy, zero is returned.
-int GpuExecutor::CalculateOccupancy(const DeviceDescription& device_description,
-                                    uint64_t registers_per_thread,
-                                    uint64_t shared_memory_per_block,
-                                    const ThreadDim& thread_dims,
-                                    CUfunction func) {
-  int suggested_blocks = 0;
-  int suggested_threads = 0;
-  CUresult err = cuOccupancyMaxPotentialBlockSize(
-      &suggested_blocks, &suggested_threads, func, nullptr,
-      shared_memory_per_block, 0);
-  CHECK_EQ(err, CUDA_SUCCESS);
-  return suggested_blocks;
-}
-
-// Compute and return the suggested thread count to achieve ideal occupancy.
-// If the provided thread dimensions match this number, zero is returned.
-int GpuExecutor::CompareOccupancy(int* initial_blocks,
-                                  const DeviceDescription& device_description,
-                                  uint64_t registers_per_thread,
-                                  uint64_t shared_memory_per_block,
-                                  const ThreadDim& thread_dims,
-                                  CUfunction func) {
-  int suggested_blocks = 0;
-  int suggested_threads = 0;
-  CUresult err = cuOccupancyMaxPotentialBlockSize(
-      &suggested_blocks, &suggested_threads, func, nullptr,
-      shared_memory_per_block, 0);
-  CHECK_EQ(err, CUDA_SUCCESS);
-  if (suggested_blocks > *initial_blocks) {
-    *initial_blocks = suggested_blocks;
-    return suggested_threads;
-  } else {
-    return 0;
-  }
-}
-
 DeviceMemoryBase GpuExecutor::Allocate(uint64_t size, int64_t memory_space) {
   if (memory_space == 1) {
     auto result = GpuCollectives::CollectiveMemoryAllocate(context_, size);
@@ -679,29 +573,6 @@ absl::Status GpuExecutor::Memset(Stream* stream, DeviceMemoryBase* location,
   return GpuDriver::AsynchronousMemsetUint8(context_, AsCudaDevicePtr(location),
                                             pattern, size,
                                             AsGpuStreamValue(stream));
-}
-
-absl::Status GpuExecutor::Memcpy(Stream* stream, void* host_dst,
-                                 const DeviceMemoryBase& gpu_src,
-                                 uint64_t size) {
-  bool ok = GpuDriver::AsynchronousMemcpyD2H(context_, host_dst,
-                                             AsCudaDevicePtr(gpu_src), size,
-                                             AsGpuStreamValue(stream));
-  // TODO(b/326130105): Change AsynchronousMemcpyD2H calls to return
-  // absl::Status.
-  if (!ok) {
-    return absl::InternalError("Failed to memcpy from device to host.");
-  }
-  return absl::OkStatus();
-}
-
-bool GpuExecutor::MemcpyDeviceToDevice(Stream* stream,
-                                       DeviceMemoryBase* gpu_dst,
-                                       const DeviceMemoryBase& gpu_src,
-                                       uint64_t size) {
-  return GpuDriver::AsynchronousMemcpyD2D(context_, AsCudaDevicePtr(gpu_dst),
-                                          AsCudaDevicePtr(gpu_src), size,
-                                          AsGpuStreamValue(stream));
 }
 
 bool GpuExecutor::HostCallback(Stream* stream,

@@ -42,12 +42,20 @@ std::string_view Thunk::KindToString(Kind kind) {
       return "all-gather";
     case Kind::kAllReduce:
       return "all-reduce";
+    case Kind::kAllToAll:
+      return "all-to-all";
     case Kind::kCall:
       return "call";
+    case Kind::kCollectivePermute:
+      return "collective-permute";
     case Kind::kConditional:
       return "conditional";
+    case Kind::kConvolution:
+      return "convolution";
     case Kind::kCopy:
       return "copy";
+    case Kind::kCustomCall:
+      return "custom-call";
     case Kind::kDot:
       return "dot";
     case Kind::kFft:
@@ -105,6 +113,30 @@ Thunk::CollectiveExecuteParams::CollectiveExecuteParams(
       device_assignment(device_assignment),
       collectives(collectives) {}
 
+absl::StatusOr<Thunk::CustomCallExecuteParams>
+Thunk::CustomCallExecuteParams::Create(
+    const ExecutableRunOptions* run_options) {
+  // Device ordinal must be set by caller and passed in run options, if not,
+  // we use the device ordinal from the parent StreamExecutor.
+  int32_t device_ordinal =
+      run_options->device_ordinal() >= 0
+          ? run_options->device_ordinal()
+          : run_options->stream()->parent()->device_ordinal();
+
+  return CustomCallExecuteParams{device_ordinal, run_options->stream(),
+                                 run_options->allocator(),
+                                 run_options->ffi_execution_context()};
+}
+
+Thunk::CustomCallExecuteParams::CustomCallExecuteParams(
+    int32_t device_ordinal, stream_executor::Stream* stream,
+    stream_executor::DeviceMemoryAllocator* allocator,
+    const ffi::ExecutionContext* ffi_execution_context)
+    : device_ordinal(device_ordinal),
+      stream(stream),
+      allocator(allocator),
+      ffi_execution_context(ffi_execution_context) {}
+
 tsl::AsyncValueRef<Thunk::ExecuteEvent> Thunk::OkExecuteEvent() {
   static tsl::AsyncValueOwningRef<ExecuteEvent>* event = [] {
     auto* storage = new tsl::internal::AsyncValueStorage<ExecuteEvent>();
@@ -145,6 +177,15 @@ ThunkSequence::BufferUses ThunkSequence::buffer_uses() const {
     buffer_uses.insert(buffer_uses.end(), uses.begin(), uses.end());
   }
   return buffer_uses;
+}
+
+ThunkSequence::ResourceUses ThunkSequence::resource_uses() const {
+  ResourceUses resource_uses;
+  for (auto& thunk : *this) {
+    ResourceUses uses = thunk->resource_uses();
+    resource_uses.insert(resource_uses.end(), uses.begin(), uses.end());
+  }
+  return resource_uses;
 }
 
 }  // namespace xla::cpu

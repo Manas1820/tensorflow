@@ -59,6 +59,22 @@ class InterpreterStream : public host::HostStream {
   absl::Status RecordEvent(Event *event) override {
     return absl::UnimplementedError("Not implemented.");
   }
+
+  absl::Status Memcpy(void *host_dst, const DeviceMemoryBase &gpu_src,
+                      uint64_t size) override {
+    void *src_mem = const_cast<void *>(gpu_src.opaque());
+    EnqueueTask(
+        [this, host_dst, src_mem, size]() { memcpy(host_dst, src_mem, size); });
+    return BlockUntilDone();
+  }
+
+  absl::Status Memcpy(DeviceMemoryBase *gpu_dst, const void *host_src,
+                      uint64_t size) override {
+    void *dst_mem = gpu_dst->opaque();
+    EnqueueTask(
+        [this, dst_mem, host_src, size]() { memcpy(dst_mem, host_src, size); });
+    return BlockUntilDone();
+  }
 };
 
 class XlaInterpreterExecutor : public StreamExecutorCommon {
@@ -88,14 +104,6 @@ class XlaInterpreterExecutor : public StreamExecutorCommon {
   }
   void HostMemoryDeallocate(void *mem) override {
     delete[] static_cast<char *>(mem);
-  }
-
-  absl::Status Memcpy(Stream *stream, void *host_dst,
-                      const DeviceMemoryBase &dev_src, uint64_t size) override;
-  bool MemcpyDeviceToDevice(Stream *stream, DeviceMemoryBase *pop_dst,
-                            const DeviceMemoryBase &host_src,
-                            uint64_t size) override {
-    return false;
   }
 
   absl::Status Memset(Stream *stream, DeviceMemoryBase *location,

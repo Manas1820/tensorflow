@@ -147,3 +147,57 @@ xla_cc_test(
         "@local_tsl//tsl/platform:test_main",
     ],
 )
+
+xla_cc_test(
+    name = "custom_call_benchmark_test",
+    srcs = ["custom_call_benchmark_test.cc"],
+    deps = [
+        ":hlo_benchmark_runner",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla/ffi",
+        "//xla/ffi:ffi_api",
+        "//xla/tests:hlo_test_base",
+        "//xla/tests:test_macros_header",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+        "@local_tsl//tsl/platform:logging",
+        "@local_tsl//tsl/platform:test_benchmark",
+        "@local_tsl//tsl/platform:test_main",
+    ],
+)
+
+xla_cc_test(
+    name = "gather_benchmark_test",
+    srcs = ["gather_benchmark_test.cc"],
+    deps = [
+        ":hlo_benchmark_runner",
+        "//xla:array2d",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/strings",
+        "@local_tsl//tsl/platform:logging",
+        "@local_tsl//tsl/platform:test_benchmark",
+        "@local_tsl//tsl/platform:test_main",
+    ],
+)
+
+xla_cc_test(
+    name = "select_and_scatter_benchmark_test",
+    srcs = ["select_and_scatter_benchmark_test.cc"],
+    deps = [
+        ":hlo_benchmark_runner",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+        "@local_tsl//tsl/platform:logging",
+        "@local_tsl//tsl/platform:test_benchmark",
+        "@local_tsl//tsl/platform:test_main",
+    ],
+)

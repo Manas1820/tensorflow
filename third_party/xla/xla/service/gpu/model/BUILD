@@ -1,7 +1,7 @@
 load("@local_config_cuda//cuda:build_defs.bzl", "if_cuda")
 load("@local_tsl//tsl/platform:build_config.bzl", "tf_proto_library")
 load("@local_tsl//tsl/platform/default:cuda_build_defs.bzl", "if_cuda_is_configured")
-load("//xla:xla.bzl", "xla_cc_test", "xla_nvml_deps")
+load("//xla:xla.bzl", "xla_cc_test")
 
 # Libraries for performance modeling of HLO.
 load("//xla/tests:build_defs.bzl", "xla_test")
@@ -322,7 +322,7 @@ cc_library(
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
         "@local_tsl//tsl/platform:status",
-    ] + if_cuda_is_configured(xla_nvml_deps()),
+    ] + if_cuda_is_configured(["@local_config_cuda//cuda:nvml_headers"]),
 )
 
 xla_cc_test(
@@ -388,6 +388,7 @@ xla_cc_test(
         "//xla/service/gpu:backend_configs_cc",
         "//xla/service/gpu:gpu_device_info_for_tests",
         "//xla/service/gpu:hlo_traversal",
+        "//xla/service/gpu:launch_dimensions",
         "//xla/stream_executor:device_description",
         "//xla/tests:hlo_test_base",
         "//xla/tests:xla_internal_test_main",
@@ -532,7 +533,7 @@ cc_library(
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",
-        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
@@ -690,6 +691,7 @@ xla_cc_test(
     srcs = ["symbolic_tile_analysis_test.cc"],
     deps = [
         ":indexing_test_utils",
+        ":symbolic_tile",
         ":symbolic_tile_analysis",
         ":tiled_hlo_computation",
         ":tiled_hlo_instruction",
@@ -706,6 +708,7 @@ xla_cc_test(
         "@com_google_absl//absl/types:span",
         "@com_google_googletest//:gtest_main",
         "@llvm-project//mlir:IR",
+        "@local_tsl//tsl/lib/core:status_test_util",
         "@local_tsl//tsl/platform:statusor",
     ],
 )

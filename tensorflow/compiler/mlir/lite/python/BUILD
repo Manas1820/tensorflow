@@ -46,13 +46,9 @@ cc_library(
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
-        "@llvm-project//llvm:Support",
         "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",
-        "@llvm-project//mlir:Pass",
         "@llvm-project//mlir:Support",
-        "@llvm-project//mlir:Transforms",
     ],
 )
 
@@ -229,6 +225,7 @@ cc_library(
         "//tensorflow/lite/toco/logging:toco_conversion_log_proto_cc",
         "//third_party/python_runtime:headers",  # build_cleaner: keep; DNR: b/35864863
         "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_protobuf//:protobuf_headers",

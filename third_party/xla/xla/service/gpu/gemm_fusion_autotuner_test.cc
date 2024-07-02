@@ -600,8 +600,9 @@ ENTRY main {
                               }
                             })pb"));
   autotune_results_override.mutable_results(0)->set_device(
-      cache_key.GetModelStr());
-  autotune_results_override.mutable_results(0)->set_hlo(cache_key.GetHlo());
+      std::string(cache_key.GetModelStr()));
+  autotune_results_override.mutable_results(0)->set_hlo(
+      std::string(cache_key.GetHlo()));
   CHECK_OK(AutotunerUtil::LoadAutotuneResults(autotune_results_override));
 
   HloPassPipeline pipeline("gemm_autotune");
@@ -616,7 +617,7 @@ ENTRY main {
                                    GetToolkitVersion(), fp8_rewrite);
   }
 
-  EXPECT_OK(HloTestBase::RunHloPass(&pipeline, module.get()));
+  TF_EXPECT_OK(HloTestBase::RunHloPass(&pipeline, module.get()));
   const bool is_at_least_hopper =
       std::holds_alternative<se::CudaComputeCapability>(
           autotune_config.GetGpuComputeCapability()) &&
@@ -842,6 +843,34 @@ ENTRY e {
 // CHECK:   ROOT %triton_gemm_out = f16[16,16]{1,0} fusion(%x, %y), kind=kCustom, calls=%triton_gemm_out_computation
 // CHECK-SAME: "block_m":
 )");
+}
+
+// TODO(b/337839570): Triton currently has a limitation where it crashes
+// on small block_k values depending on the bit-width of the inputs to the
+// dot. For this test case, it should skip any block_k values that are <= 16
+// since the smallest type has a bit-width of 8.
+TEST_F(GemmFusionAutotunerExhaustiveTest, SkipsCrashingTileKConfig) {
+  std::unique_ptr<VerifiedHloModule> module = ParseAndReturnVerifiedModule(R"(
+HloModule module
+ENTRY e {
+  x = s8[33,33]{1,0} parameter(0)
+  c = f16[33,33]{1,0} convert(x)
+  y = f16[33,33]{1,0} parameter(1)
+  ROOT out = f16[33,33]{1,0} dot(c, y), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+}
+)")
+                                                  .value();
+  const se::CudaComputeCapability compute_capability{
+      se::CudaComputeCapability::AMPERE, /*minor=*/0};
+  TF_ASSERT_OK_AND_ASSIGN(
+      const std::vector<TritonGemmConfig> configs,
+      GetPossibleMatmulAutotuneConfigs(
+          *Cast<HloDotInstruction>(
+              module->entry_computation()->root_instruction()),
+          compute_capability, GetToolkitVersion(), GetDebugOptionsForTest()));
+  EXPECT_TRUE(std::all_of(
+      configs.begin(), configs.end(),
+      [](const TritonGemmConfig& config) { return config.block_k > 16; }));
 }
 
 class GemmFusionAutotunerDisableSplitK : public GemmFusionAutotunerTest {

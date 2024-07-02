@@ -21,7 +21,7 @@ load(
     "@local_tsl//tsl/platform/default:cuda_build_defs.bzl",
     "if_cuda_is_configured",
 )
-load("//xla:xla.bzl", "xla_cc_test", "xla_cub_deps", "xla_internal")
+load("//xla:xla.bzl", "xla_cc_test", "xla_internal")
 load(
     "//xla/service/gpu:build_defs.bzl",
     "build_cub_sort_kernels",
@@ -598,7 +598,11 @@ cc_library(
     hdrs = ["triton_sparse_extensions.h"],
     deps = [
         "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:ArithDialect",
+        "@llvm-project//mlir:GPUDialect",
         "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:LLVMCommonConversion",
+        "@llvm-project//mlir:LLVMDialect",
         "@llvm-project//mlir:Pass",
         "@llvm-project//mlir:Rewrite",
         "@llvm-project//mlir:Support",
@@ -607,6 +611,8 @@ cc_library(
         "@triton//:TritonDialects",
         "@triton//:TritonGPUToLLVM",
         "@triton//:TritonGPUTransforms",
+        "@triton//third_party/nvidia:NVGPUDialect",
+        "@triton//third_party/nvidia:TritonNVIDIAGPUToLLVM",
     ],
 )
 
@@ -627,8 +633,6 @@ xla_test(
         ":backend_configs_cc",
         ":gpu_device_info_for_tests",
         ":ir_emitter_triton",
-        ":matmul_utils",
-        ":triton_fusion_analysis",
         ":triton_test_utils",
         "//xla:autotuning_proto_cc",
         "//xla:error_spec",
@@ -639,6 +643,7 @@ xla_test(
         "//xla/service:pattern_matcher",
         "//xla/service:pattern_matcher_gmock",
         "//xla/service/gpu/model:tiled_hlo_computation",
+        "//xla/service/gpu/tests:gpu_codegen_test",
         "//xla/stream_executor:device_description",
         "//xla/stream_executor/cuda:cublas_plugin",
         "//xla/tests:filecheck",
@@ -681,9 +686,9 @@ cc_library(
         "//xla/service:float_normalization",
         "//xla/service:hlo_pass_pipeline",
         "//xla/service/gpu/model:tiled_hlo_computation",
-        "//xla/service/gpu/tests:gpu_codegen_test",
         "//xla/stream_executor:device_description",
         "//xla/tests:filecheck",
+        "//xla/tests:hlo_test_base",
         "//xla/tests:verified_hlo_module",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/status",
@@ -718,6 +723,7 @@ cc_test(
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:NVVMDialect",
         "@llvm-project//mlir:Support",
+        "@local_tsl//tsl/lib/core:status_test_util",
         "@local_tsl//tsl/platform:logging",
         "@triton//:TritonDialects",
     ],
@@ -735,6 +741,7 @@ xla_test(
         "large",
         "no_oss",  # requires-mem:16g tag doesn't work in open source
         "nomac",
+        "nozapfhahn",  # Times out under coverage
         "requires-mem:16g",
     ],
     deps = [
@@ -1129,6 +1136,7 @@ cc_library(
         "//xla/hlo/ir:hlo",
         "//xla/service:hlo_module_config",
         "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/container:inlined_vector",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
         "@local_tsl//tsl/platform:logging",
@@ -1174,7 +1182,7 @@ gpu_kernel_library(
         "@eigen_archive//:eigen3",
         "@local_config_cuda//cuda:cuda_headers",
         "@local_tsl//tsl/platform:bfloat16",
-    ] + if_cuda_is_configured(xla_cub_deps()) + if_rocm_is_configured([
+    ] + if_cuda_is_configured(["@local_config_cuda//cuda:cub_headers"]) + if_rocm_is_configured([
         "@local_config_rocm//rocm:rocprim",
     ]),
 )
@@ -1210,7 +1218,6 @@ cc_library(
         "//xla:literal",
         "//xla:literal_util",
         "//xla:shape_util",
-        "//xla:status",
         "//xla:status_macros",
         "//xla:types",
         "//xla:util",
@@ -1253,35 +1260,31 @@ cc_library(
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
         "@local_tsl//tsl/platform:tensor_float_32_utils",
     ],
 )
 
-xla_test(
+xla_cc_test(
     name = "triton_support_test",
-    srcs = if_gpu_is_configured(["triton_support_test.cc"]),
-    backends = [
-        "gpu_a100",
-        "gpu_h100",
-        "gpu_amd_any",
-    ],
+    srcs = ["triton_support_test.cc"],
+    shard_count = 20,
     deps = [
         ":gpu_device_info_for_tests",
         ":ir_emitter_triton",
         ":triton_support",
         ":triton_test_utils",
+        "//xla:shape_util",
         "//xla:xla_data_proto_cc",
         "//xla:xla_proto_cc",
         "//xla/hlo/ir:hlo",
         "//xla/service/gpu/model:tiled_hlo_computation",
         "//xla/stream_executor:device_description",
         "@com_google_absl//absl/algorithm:container",
-        "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
         "@com_google_googletest//:gtest_main",
-        "@local_tsl//tsl/lib/core:status_test_util",
         "@local_tsl//tsl/platform:protobuf",
-        "@local_tsl//tsl/platform:status_matchers",
         "@local_tsl//tsl/platform:statusor",
     ],
 )
@@ -2148,7 +2151,6 @@ cc_library(
         ":cublas_cudnn",
         "//xla:permutation_util",
         "//xla:shape_util",
-        "//xla:status",
         "//xla:util",
         "//xla:window_util",
         "//xla:xla_data_proto_cc",
@@ -2157,6 +2159,7 @@ cc_library(
         "//xla/stream_executor:device_description",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
@@ -2596,6 +2599,7 @@ xla_cc_test(
         ":softmax_rewriter_triton",
         "//xla:shape_util",
         "//xla/hlo/ir:hlo",
+        "//xla/service:instruction_fusion",
         "//xla/service:pattern_matcher",
         "//xla/service:pattern_matcher_gmock",
         "//xla/service/gpu/model:gpu_hlo_cost_analysis",
@@ -3017,6 +3021,7 @@ cc_library(
         "//xla/service:hlo_pass",
         "//xla/stream_executor:dnn",
         "//xla/stream_executor:stream_executor_h",
+        "//xla/service:dump",
         "//xla/stream_executor/cuda:cudnn_frontend_helpers",
         "//xla/stream_executor/cuda:cudnn_plugin",
         "@local_tsl//tsl/platform:errors",
@@ -3156,6 +3161,7 @@ cc_library(
         "//xla/hlo/ir:hlo",
         "//xla/service:float_support",
         "//xla/stream_executor:device_description",
+        "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/log:check",
     ],
 )
@@ -3436,6 +3442,7 @@ cc_library(
         ":compile_module_to_llvm_ir",
         ":conv_layout_normalization",
         ":copy_fusion",
+        ":collective_permute_valid_iteration_annotator",
         ":custom_kernel_fusion_rewriter",
         ":dot_dimension_sorter",
         ":dot_operand_converter",
@@ -4019,6 +4026,7 @@ cc_library(
         ":cudnn_fused_conv_rewriter",
         ":cusolver_rewriter",
         ":gemm_algorithm_picker",
+        ":gpu_algebraic_simplifier",
         ":gpu_compiler",
         ":gpu_conv_padding_legalization",
         ":gpu_conv_rewriter",
@@ -4043,6 +4051,8 @@ cc_library(
         "//xla/service:tuple_simplifier",
         "//xla/service/gpu/llvm_gpu_backend",
         "//xla/stream_executor:device_description",
+        "//xla/stream_executor:device_memory_allocator",
+        "//xla/stream_executor:dnn",
         "//xla/stream_executor/rocm:rocm_platform_id",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",
@@ -4549,13 +4559,10 @@ cc_library(
         "TENSORFLOW_USE_ROCM=1",
     ]),
     deps = if_gpu_is_configured([
+        # keep sorted
         ":buffer_comparator_kernel",
         ":gpu_asm_opts_util",
         ":launch_dimensions",
-        "@com_google_absl//absl/base",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
-        "@eigen_archive//:eigen3",
         "//xla:shape_util",
         "//xla:status_macros",
         "//xla:util",
@@ -4564,10 +4571,17 @@ cc_library(
         "//xla/stream_executor:device_memory_handle",
         "//xla/stream_executor:typed_kernel_factory",
         "//xla/stream_executor/gpu:asm_compiler",
+        "@com_google_absl//absl/base",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@eigen_archive//:eigen3",
         "@local_tsl//tsl/platform:errors",
         "@local_tsl//tsl/platform:logging",
         "@local_tsl//tsl/platform:ml_dtypes",
         "@local_tsl//tsl/platform:statusor",
+    ]) + if_rocm_is_configured([
+        # keep sorted
+        "@local_config_rocm//rocm:rocm_headers",
     ]),
 )
 
@@ -4799,8 +4813,8 @@ cc_library(
     ] + if_cuda_is_configured([
         "@local_config_cuda//cuda:cuda_headers",
         "@local_config_cuda//cuda:cudnn_header",
-    ]) + if_static([
-        "@com_google_protobuf//:protobuf",
+    ]) + if_google([
+        "@com_google_protobuf//:wrappers_cc_proto",
     ]),
 )
 
@@ -5193,6 +5207,24 @@ xla_test(
         "//xla/service/gpu/tests:gpu_codegen_test",
         "//xla/stream_executor:device_description",
         "//xla/tests:xla_internal_test_main",
+    ],
+)
+
+xla_cc_test(
+    name = "gpu_float_support_test",
+    srcs = ["gpu_float_support_test.cc"],
+    deps = [
+        ":gpu_float_support",
+        "//xla:shape_util",
+        "//xla:test_helpers",
+        "//xla:xla_data_proto_cc",
+        "//xla/hlo/ir:hlo",
+        "//xla/service:float_normalization",
+        "//xla/service:hlo_verifier",
+        "//xla/stream_executor:device_description",
+        "//xla/tests:hlo_test_base",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_googletest//:gtest_main",
     ],
 )
 
@@ -5843,35 +5875,37 @@ xla_cc_test(
     name = "autotuner_util_test",
     srcs = if_cuda_is_configured(["autotuner_util_test.cc"]),
     deps = if_cuda_is_configured([
+        # keep sorted
         ":autotuner_util",
-        "@com_google_googletest//:gtest",
+        "//xla:autotune_results_proto_cc",
+        "//xla:autotuning_proto_cc",
+        "//xla:xla_proto_cc",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/utils:hlo_query",
+        "//xla/stream_executor:platform",
+        "//xla/stream_executor:platform_manager",
+        "//xla/stream_executor/host:host_platform",
+        "//xla/tests:hlo_test_base",
+        "//xla/tests:verified_hlo_module",
         "@com_google_absl//absl/base:log_severity",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/log:scoped_mock_log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
-        "//xla:autotune_results_proto_cc",
-        "//xla:autotuning_proto_cc",
-        "//xla:xla_proto_cc",
-        "//xla/hlo/ir:hlo",
-        "//xla/hlo/utils:hlo_query",
-        "//xla/stream_executor:platform_manager",
-        "//xla/stream_executor:platform",
-        "//xla/stream_executor/host:host_platform",
-        "//xla/tests:hlo_test_base",
-        "//xla/tests:verified_hlo_module",
-        "//xla/tests:xla_internal_test_main",  # Keep outside GPU guard
+        "@com_google_googletest//:gtest",
         "@local_tsl//tsl/lib/core:status_test_util",
         "@local_tsl//tsl/platform:env",
         "@local_tsl//tsl/platform:errors",
         "@local_tsl//tsl/platform:logging",
         "@local_tsl//tsl/platform:path",
         "@local_tsl//tsl/platform:protobuf",
-        "@local_tsl//tsl/platform:status_matchers",
         "@local_tsl//tsl/platform:status",
+        "@local_tsl//tsl/platform:status_matchers",
         "@local_tsl//tsl/platform:statusor",
-    ]),
+    ]) + [
+        "//xla/tests:xla_internal_test_main",  # Keep outside GPU guard
+    ],
 )
 
 cc_library(
@@ -5882,7 +5916,6 @@ cc_library(
         "//xla:util",
         "//xla:xla_data_proto_cc",
         "//xla/hlo/ir:hlo",
-        "//xla/hlo/ir:hlo_instruction_utils",
         "//xla/hlo/utils:hlo_query",
         "//xla/service:collective_ops_utils",
         "//xla/service:flatten_call_graph",
@@ -6107,8 +6140,6 @@ cc_library(
     deps = [
         ":backend_configs_cc",
         "//xla:literal_util",
-        "//xla:status",
-        "//xla:statusor",
         "//xla:util",
         "//xla:xla_data_proto_cc",
         "//xla/hlo/ir:hlo",

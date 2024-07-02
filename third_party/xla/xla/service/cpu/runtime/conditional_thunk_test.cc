@@ -20,32 +20,16 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
-#include "absl/status/status.h"
 #include "xla/runtime/buffer_use.h"
 #include "xla/service/buffer_assignment.h"
+#include "xla/service/cpu/runtime/resource_use.h"
 #include "xla/service/cpu/runtime/thunk.h"
-#include "xla/tsl/concurrency/async_value_ref.h"
+#include "xla/service/cpu/runtime/thunk_testlib.h"
 #include "tsl/platform/statusor.h"
 #include "tsl/platform/test.h"
 
 namespace xla::cpu {
 namespace {
-
-// A test-only thunk to create a Thunk with a specific buffer use.
-class TestThunk : public Thunk {
- public:
-  explicit TestThunk(BufferUse buffer_use)
-      : Thunk(Kind::kKernel, {"test"}), buffer_use_(buffer_use) {}
-
-  tsl::AsyncValueRef<ExecuteEvent> Execute(const ExecuteParams&) final {
-    return absl::UnimplementedError("Unimplemented");
-  }
-
-  BufferUses buffer_uses() const final { return {buffer_use_}; }
-
- private:
-  BufferUse buffer_use_;
-};
 
 TEST(ConditionalThunkTest, BufferUses) {
   BufferAllocation alloc(0, 1024, 0);
@@ -54,7 +38,7 @@ TEST(ConditionalThunkTest, BufferUses) {
 
   std::vector<ThunkSequence> branch_sequences(1);
   branch_sequences[0].push_back(
-      std::make_unique<TestThunk>(BufferUse::Read(read_slice)));
+      std::make_unique<BufferUseThunk>(BufferUse::Read(read_slice)));
 
   TF_ASSERT_OK_AND_ASSIGN(
       auto thunk, ConditionalThunk::Create({"conditional"}, branch_index_slice,
@@ -63,6 +47,24 @@ TEST(ConditionalThunkTest, BufferUses) {
   EXPECT_EQ(thunk->buffer_uses().size(), 2);
   EXPECT_EQ(thunk->buffer_uses()[0], BufferUse::Read(branch_index_slice));
   EXPECT_EQ(thunk->buffer_uses()[1], BufferUse::Read(read_slice));
+}
+
+TEST(ConditionalThunkTest, ResourceUses) {
+  BufferAllocation alloc(0, 1024, 0);
+  BufferAllocation::Slice branch_index_slice(&alloc, 0, sizeof(int32_t));
+
+  auto token = Resource::Create(Resource::kToken);
+
+  std::vector<ThunkSequence> branch_sequences(1);
+  branch_sequences[0].push_back(
+      std::make_unique<ResourceUseThunk>(ResourceUse::Read(token)));
+
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto thunk, ConditionalThunk::Create({"conditional"}, branch_index_slice,
+                                           std::move(branch_sequences)));
+
+  EXPECT_EQ(thunk->resource_uses().size(), 1);
+  EXPECT_EQ(thunk->resource_uses()[0], ResourceUse::Read(token));
 }
 
 }  // namespace

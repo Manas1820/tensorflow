@@ -84,10 +84,8 @@ limitations under the License.
 #include "tsl/platform/env.h"
 #include "tsl/platform/errors.h"
 #include "tsl/platform/logging.h"
-#include "tsl/platform/ml_dtypes.h"
 #include "tsl/platform/status.h"
 #include "tsl/platform/statusor.h"
-#include "tsl/platform/types.h"
 
 namespace xla {
 
@@ -4712,6 +4710,12 @@ std::unique_ptr<Array2D<int32_t>> HloEvaluator::MatmulArray2D(
     const Array2D<int32_t>& lhs, const Array2D<int32_t>& rhs) {
   return MatmulArray2DImpl<int32_t>(
       lhs, rhs, __xla_cpu_runtime_EigenSingleThreadedMatMulS32);
+}
+
+std::unique_ptr<Array2D<uint8_t>> HloEvaluator::MatmulArray2D(
+    const Array2D<uint8_t>& lhs, const Array2D<uint8_t>& rhs) {
+  return MatmulArray2DImpl<uint8_t>(
+      lhs, rhs, __xla_cpu_runtime_EigenSingleThreadedMatMulU8);
 }
 
 }  // namespace xla

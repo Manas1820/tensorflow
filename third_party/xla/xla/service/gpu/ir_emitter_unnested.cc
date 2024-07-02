@@ -1138,6 +1138,7 @@ absl::Status IrEmitterUnnested::EmitFusedMHABackwardThunk(
   TF_RET_CHECK(output_index == instr->shape().tuple_shapes().size());
   TF_ASSIGN_OR_RETURN(const auto mask_type,
                       AsCudnnFmhaMaskKind(config.mask_type()));
+  bool force_deterministic = config.force_deterministic();
   GpufMHABackwardDescriptor descriptor = {
       kind,
       config,
@@ -1158,7 +1159,8 @@ absl::Status IrEmitterUnnested::EmitFusedMHABackwardThunk(
       fwd_output_shape,
       mask_shape,
       d_bias_shape,
-      bias_shape};
+      bias_shape,
+      force_deterministic};
 
   TF_ASSIGN_OR_RETURN(GpufMHABackwardConfig fmha_backward_config,
                       GpufMHABackwardConfig::For(descriptor));
@@ -1727,14 +1729,14 @@ absl::Status IrEmitterUnnested::EmitAsyncCustomCallStart(
   }
 #if GOOGLE_CUDA || TF_HIPBLASLT
   if (IsCublasLtMatmul(*wrapped)) {
-    auto status = EmitGemmThunk(custom_call);
+    auto status = EmitCublasLtMatmulThunk(custom_call);
     if (status.ok()) {
       thunk_sequence_.back()->set_execution_stream_id(execution_stream_id);
     }
     return status;
   }
   if (IsCublasLtMatmulF8(*wrapped)) {
-    auto status = EmitGemmThunk(custom_call);
+    auto status = EmitCublasLtMatmulThunkF8(custom_call);
     if (status.ok()) {
       thunk_sequence_.back()->set_execution_stream_id(execution_stream_id);
     }

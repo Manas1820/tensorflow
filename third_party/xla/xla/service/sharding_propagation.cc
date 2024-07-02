@@ -48,6 +48,8 @@ limitations under the License.
 #include "xla/hlo/utils/hlo_sharding_util.h"
 #include "xla/protobuf_util.h"
 #include "xla/service/dot_as_convolution_util.h"
+#include "xla/service/hlo_cse.h"
+#include "xla/service/hlo_pass_pipeline.h"
 #include "xla/service/host_memory_offload_annotations.h"
 #include "xla/service/spmd/shard_barrier_partitioner.h"
 #include "xla/shape.h"
@@ -2863,7 +2865,8 @@ absl::StatusOr<bool> ShardingPropagation::Run(
 
   // Instructions that are related through a computation and need to share the
   // same sharding.
-  auto get_related_instructions = [this](HloInstruction* inst) {
+  auto get_related_instructions = [this,
+                                   &computation_map](HloInstruction* inst) {
     if (inst->opcode() == HloOpcode::kWhile) {
       return std::vector<HloInstruction*>{
           inst, inst->while_body()->root_instruction(),
@@ -2887,6 +2890,18 @@ absl::StatusOr<bool> ShardingPropagation::Run(
     } else if (inst->opcode() == HloOpcode::kCall) {
       HloComputation* callee = inst->called_computations().front();
       return std::vector<HloInstruction*>{inst, callee->root_instruction()};
+    } else if (inst->opcode() == HloOpcode::kParameter) {
+      auto it = computation_map.find(inst->parent());
+      if (it != computation_map.end() &&
+          it->second->opcode() == HloOpcode::kConditional) {
+        HloInstruction* cond = it->second;
+        for (int64_t i = 1; i < cond->operand_count(); ++i) {
+          if (cond->called_computations()[i - 1] == inst->parent()) {
+            return std::vector<HloInstruction*>{inst, cond->mutable_operand(i)};
+          }
+        }
+      }
+      return std::vector<HloInstruction*>{};
     } else {
       CHECK(false);
     }
@@ -2927,6 +2942,11 @@ absl::StatusOr<bool> ShardingPropagation::Run(
               auto it = computation_map.find(instruction->parent());
               if (it != computation_map.end()) {
                 propagate_to_instruction(it->second);
+                // Propagate parameter shardings back to conditional's operands.
+                if (instruction->opcode() == HloOpcode::kParameter &&
+                    it->second->opcode() == HloOpcode::kConditional) {
+                  propagate_to_instruction(instruction);
+                }
               }
             }
           };
@@ -3247,6 +3267,23 @@ absl::StatusOr<bool> ShardingPropagation::Run(
   for (int64_t aggressiveness = 0; aggressiveness < 4; ++aggressiveness) {
     TF_RETURN_IF_ERROR(
         run_to_fix_point(aggressiveness, /*propagate_shard_group=*/true));
+  }
+
+  if (changed) {
+    // Run CSE again to remove any duplicate ops with the same sharding or
+    // compatible shardings.
+    HloPassPipeline pass("sharding-propation-cse");
+    pass.AddPass<HloCSE>(
+        /*is_layout_sensitive=*/false,
+        /*only_fusion_computations=*/false,
+        /*ignore_control_dependencies=*/false,
+        /*only_scalars=*/false,
+        /*is_sharding_sensitive=*/true,
+        /*allow_compatible_sharding=*/true);
+    TF_RETURN_IF_ERROR(pass.Run(module, execution_threads).status());
+    // propagate sharding again to update the sharding of the CSE'd ops.
+    TF_RETURN_IF_ERROR(run_to_fix_point(/*aggressiveness=*/3,
+                                        /*propagate_shard_group=*/false));
   }
 
   // Align the shardings from the same shard_as group so that they will adopt

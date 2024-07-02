@@ -34,12 +34,14 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/service/gpu/hlo_traversal.h"
 #include "xla/service/gpu/model/indexing_test_utils.h"
+#include "xla/service/gpu/model/symbolic_tile.h"
 #include "xla/service/gpu/model/tiled_hlo_computation.h"
 #include "xla/service/gpu/model/tiled_hlo_instruction.h"
 #include "xla/service/instruction_fusion.h"
 #include "xla/tests/hlo_test_base.h"
 #include "xla/tests/verified_hlo_module.h"
 #include "xla/util.h"
+#include "tsl/lib/core/status_test_util.h"
 #include "tsl/platform/statusor.h"
 
 namespace xla {
@@ -53,8 +55,8 @@ using ::testing::IsEmpty;
 using ::testing::Matcher;
 using ::testing::Not;
 using ::testing::SizeIs;
-using ::testing::status::IsOkAndHolds;
-using ::testing::status::StatusIs;
+using ::tsl::testing::IsOkAndHolds;
+using ::tsl::testing::StatusIs;
 using TilingVector = std::vector<SymbolicTileAnalysis::Tiling>;
 
 MATCHER_P3(MatchTiledHloInstructionImpl, tile_sizes, tile_strides,
@@ -130,7 +132,7 @@ ENTRY main {
   EXPECT_THAT(root->block_id_to_tile_offsets_indexing(), MatchIndexingMap(R"(
     (d0) -> (d0 floordiv 10, (d0 mod 10) * 10)
     domain:
-    d0 in [0, 19]
+    d0 in [0, 20)
   )"));
 
   auto p0_from_subtract0 = root->operand(0);
@@ -142,7 +144,7 @@ ENTRY main {
                                       /*block_id_to_tile_offsets_indexing=*/R"(
     (d0) -> (d0 floordiv 10, (d0 mod 10) * 10)
     domain:
-    d0 in [0, 19]
+    d0 in [0, 20)
   )"));
 
   EXPECT_THAT(*p0_from_subtract1, MatchTiledHloInstruction(
@@ -151,7 +153,7 @@ ENTRY main {
                                       /*block_id_to_tile_offsets_indexing=*/R"(
     (d0) -> (d0 floordiv 10, 0)
     domain:
-    d0 in [0, 19]
+    d0 in [0, 20)
   )"));
 }
 
@@ -241,7 +243,7 @@ ENTRY main {
                   /*tile_sizes=*/{1, 97}, /*tile_strides=*/{1, 1},
                   /*block_id_to_tile_offsets_indexing=*/R"(
     (d0) -> (d0, 0)
-    domain: d0 in [0, 1]
+    domain: d0 in [0, 2)
   )"));
 }
 
@@ -271,7 +273,7 @@ ENTRY main {
                          /*block_id_to_tile_offsets_indexing=*/R"(
     (d0) -> ((d0 floordiv 16) * 2, ((d0 floordiv 8) mod 2) * 4, (d0 mod 8) * 2)
     domain:
-    d0 in [0, 31]
+    d0 in [0, 32)
   )"));
 
   EXPECT_THAT(*root->operand(0),
@@ -280,7 +282,7 @@ ENTRY main {
                   /*block_id_to_tile_offsets_indexing=*/R"(
     (d0) -> (((d0 floordiv 8) mod 2) * 4, (d0 mod 8) * 2, (d0 floordiv 16) * 2)
     domain:
-    d0 in [0, 31]
+    d0 in [0, 32)
   )"));
 }
 
@@ -314,7 +316,7 @@ ENTRY main {
                          /*block_id_to_tile_offsets_indexing=*/R"(
     (d0) -> ((d0 floordiv 4) * 2, (d0 mod 4) * 2)
     domain:
-    d0 in [0, 7]
+    d0 in [0, 8)
   )"));
 
   EXPECT_THAT(*p0_from_slice0,
@@ -323,7 +325,7 @@ ENTRY main {
                   /*block_id_to_tile_offsets_indexing=*/R"(
     (d0) -> ((d0 floordiv 4) * 2, (d0 mod 4) * 2 + 2)
     domain:
-    d0 in [0, 7]
+    d0 in [0, 8)
   )"));
 
   EXPECT_THAT(*p0_from_slice1,
@@ -332,7 +334,7 @@ ENTRY main {
                   /*block_id_to_tile_offsets_indexing=*/R"(
     (d0) -> ((d0 floordiv 4) * 2 + 3, (d0 mod 4) * 2 + 4)
     domain:
-    d0 in [0, 7]
+    d0 in [0, 8)
   )"));
 }
 
@@ -369,7 +371,9 @@ ENTRY main {
 })"));
   std::optional<SymbolicTileAnalysis> analysis = TryAnalyzeModule(module.get());
   ASSERT_TRUE(analysis.has_value());
-  EXPECT_THAT(analysis->GetConstraints(), SizeIs(1));
+  const ConstraintExpression& constraints = analysis->GetConstraints();
+  EXPECT_THAT(constraints.DisjointConjointConstraints(), SizeIs(2));
+  EXPECT_THAT(constraints.DisjointConjointConstraints().front(), SizeIs(1));
 }
 
 TEST_F(SymbolicTileAnalysisTest, DoesNotBailOutOnConstrainedBitcast) {
@@ -386,7 +390,9 @@ ENTRY main {
 })"));
   std::optional<SymbolicTileAnalysis> analysis = TryAnalyzeModule(module.get());
   ASSERT_TRUE(analysis.has_value());
-  EXPECT_THAT(analysis->GetConstraints(), SizeIs(1));
+  const ConstraintExpression& constraints = analysis->GetConstraints();
+  EXPECT_THAT(constraints.DisjointConjointConstraints(), SizeIs(2));
+  EXPECT_THAT(constraints.DisjointConjointConstraints().front(), SizeIs(1));
 }
 
 TEST_F(SymbolicTileAnalysisTest, BailOutOnUnsupportedConcatenate) {
@@ -439,17 +445,23 @@ ENTRY main {
 })"));
   std::optional<SymbolicTileAnalysis> analysis = TryAnalyzeModule(module.get());
   ASSERT_TRUE(analysis.has_value());
-  EXPECT_THAT(analysis->GetConstraints(), SizeIs(2));
+  const ConstraintExpression& constraints = analysis->GetConstraints();
+  EXPECT_THAT(constraints.DisjointConjointConstraints(), SizeIs(4));
+  for (const ConstraintExpression::ConjointConstraints& conjunction :
+       constraints.DisjointConjointConstraints())
+    EXPECT_THAT(conjunction, SizeIs(2));
 
   // We expect the constraints here to be
-  //    s0 mod 6 in [0, 0]
-  //    s1 mod 8 in [0, 0]
-  // We expect tile sizes {6, 8} to satisfy these constraints.
+  //    6 mod s0 in [0, 1) && 8 mod s1 in [0, 1) ||
+  //    6 mod s0 in [0, 1) && s1 mod 8 in [0, 1) ||
+  //    8 mod s1 in [0, 1) && s0 mod 6 in [0, 1) ||
+  //    s0 mod 6 in [0, 1) && s1 mod 8 in [0, 1)
+  // Tile sizes {6, 8} satisfy these constraints.
   std::vector<int64_t> possible_tile_parameters({6, 8});
   EXPECT_THAT(analysis->ParametersSatisfyConstraints(possible_tile_parameters),
               IsOkAndHolds(true));
 
-  // However, we do not expect tile sizes {6, 7} to satisfy these constraints.
+  // However, tile sizes {6, 7} do not satisfy these constraints.
   std::vector<int64_t> impossible_tile_parameters({6, 7});
   EXPECT_THAT(
       analysis->ParametersSatisfyConstraints(impossible_tile_parameters),
@@ -462,7 +474,8 @@ ENTRY main {
 
   // Passing tile parameters that satisfy the constraints should let us compute
   // a TiledHloComputation.
-  EXPECT_OK(analysis->ParametersSatisfyConstraints(possible_tile_parameters));
+  TF_EXPECT_OK(
+      analysis->ParametersSatisfyConstraints(possible_tile_parameters));
 
   // Passing tile parameters that do not satisfy the constraints should result
   // in an error...
@@ -470,7 +483,7 @@ ENTRY main {
               StatusIs(absl::StatusCode::kInvalidArgument));
 
   // ... unless we pinky-promise (lie) that they satisfy the constraints ;)
-  EXPECT_OK(analysis->ComputeTiledHloInstructions(
+  TF_EXPECT_OK(analysis->ComputeTiledHloInstructions(
       impossible_tile_parameters, /*constraints_are_known_satisfied=*/true));
 }
 
@@ -492,29 +505,11 @@ ENTRY main {
 })"));
   std::optional<SymbolicTileAnalysis> analysis = TryAnalyzeModule(module.get());
   ASSERT_TRUE(analysis.has_value());
-  // Each bitcast in the above module introduces one constraint. Once they are
-  // aggregated, we have two!
-  EXPECT_THAT(analysis->GetConstraints(), SizeIs(2));
-}
-
-TEST_F(SymbolicTileAnalysisTest, BailsOutWhenConstraintsCanNotBeMerged) {
-  // TODO(bchetioui): allow merging a constraint with itself.
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
-                          ParseAndReturnVerifiedModule(R"(
-fusion {
-  p0 = f32[1,48,4,8]{3,2,1,0} parameter(0)
-  p1 = f32[1,48,4,8]{3,2,1,0} parameter(1)
-  bitcast_p0 = f32[48,32]{1,0} bitcast(p0)
-  bitcast_p1 = f32[48,32]{1,0} bitcast(p1)
-  ROOT add = f32[48,32]{1,0} add(bitcast_p0, bitcast_p1)
-}
-
-ENTRY main {
-  p0 = f32[1,48,4,8]{3,2,1,0} parameter(0)
-  p1 = f32[1,48,4,8]{3,2,1,0} parameter(1)
-  ROOT fusion = f32[48,32]{1,0} fusion(p0, p1), kind=kLoop, calls=fusion
-})"));
-  EXPECT_FALSE(TryAnalyzeModule(module.get()).has_value());
+  // Each bitcast in the above module introduces one disjoint constraint. Once
+  // they are aggregated, we have four disjoint constraints!
+  const ConstraintExpression& constraints = analysis->GetConstraints();
+  EXPECT_THAT(constraints.DisjointConjointConstraints(), SizeIs(4));
+  EXPECT_THAT(constraints.DisjointConjointConstraints().front(), SizeIs(2));
 }
 
 bool AlwaysValid(absl::Span<const int64_t>) { return true; }
@@ -593,13 +588,13 @@ TEST_F(SymbolicTileAnalysisTest,
   TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
                           ParseAndReturnVerifiedModule(R"(
 fusion {
-  p0 = f32[1,8,6,4]{3,2,1,0} parameter(0)
-  ROOT bitcast = f32[48,4]{1,0} bitcast(p0)
+  p0 = f32[1,8,6,1]{3,2,1,0} parameter(0)
+  ROOT bitcast = f32[48,1]{1,0} bitcast(p0)
 }
 
 ENTRY main {
-  p0 = f32[1,8,6,4]{3,2,1,0} parameter(0)
-  ROOT fusion = f32[48,4]{1,0} fusion(p0), kind=kLoop, calls=fusion
+  p0 = f32[1,8,6,1]{3,2,1,0} parameter(0)
+  ROOT fusion = f32[48,1]{1,0} fusion(p0), kind=kLoop, calls=fusion
 })"));
 
   std::optional<SymbolicTileAnalysis> opt_analysis =
@@ -610,11 +605,13 @@ ENTRY main {
   TF_ASSERT_OK_AND_ASSIGN(
       std::vector<SymbolicTileAnalysis::Tiling> good_tilings,
       analysis.GetGoodTilings());
-  // The constraint on the 1st dimension is "s0 mod 6 in [0, 0]", and only 48
-  // fulfills that from the set of possible tile sizes (1, 2, 4, 8, 16, 32, 48).
+  // The constraint on the 1st dimension is
+  //   6 mod s0 in [0, 1) || s0 mod 6 in [0, 1),
+  // and only 48, 1, and 2 fulfill it from the set of possible tile sizes
+  // (1, 2, 4, 8, 16, 32, 48).
   // There is no constraint on the 2nd dimension.
   EXPECT_EQ(good_tilings, std::vector<SymbolicTileAnalysis::Tiling>(
-                              {{48, 1}, {48, 2}, {48, 4}}));
+                              {{1, 1}, {2, 1}, {48, 1}}));
 }
 
 // Logs the tilings if VLOG level 1 is enabled.
@@ -748,6 +745,42 @@ ENTRY entry_computation {
       analysis.GetGoodTilings());
   EXPECT_THAT(good_tilings, Not(IsEmpty()));
   LogTilingsIfVlog1(good_tilings);
+}
+
+// This test means to catch integer overflow errors when run with ASan build.
+TEST_F(SymbolicTileAnalysisTest,
+       FusionWithNumberOfTilesLargerThanInt32MaxIsSupported) {
+  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
+                          ParseAndReturnVerifiedModule(R"(
+HloModule softmax
+
+fused_computation {
+  param_0 = f16[65538,32768]{1,0} parameter(0)
+  ROOT log = f16[65538,32768]{1,0} log(param_0)
+}
+
+ENTRY main {
+  param_0 = f16[65538,32768]{1,0} parameter(0)
+  ROOT fusion = f16[65538,32768]{1,0} fusion(param_0), kind=kLoop, calls=fused_computation
+}
+)"));
+
+  std::optional<SymbolicTileAnalysis> analysis = TryAnalyzeModule(module.get());
+  ASSERT_TRUE(analysis.has_value());
+
+  TF_ASSERT_OK_AND_ASSIGN(
+      TiledHloComputation tiled_hlo_computation,
+      analysis->ComputeTiledHloInstructions(/*tile_parameters=*/{1, 1}));
+
+  EXPECT_THAT(*tiled_hlo_computation.GetRoot(),
+              MatchTiledHloInstruction(
+                  /*tile_sizes=*/{1, 1},
+                  /*tile_strides=*/{1, 1},
+                  /*block_id_to_tile_offsets_indexing=*/R"(
+    (d0) -> (d0 floordiv 32768, d0 mod 32768)
+    domain:
+    d0 in [0, 2147549184)
+  )"));
 }
 
 }  // namespace

@@ -192,8 +192,12 @@ class Stream {
   // of the given target size. gpu_src/dst must be pointers to GPU memory and
   // peer access must be enabled between their owning StreamExecutors.
   virtual absl::Status Memcpy(DeviceMemoryBase *gpu_dst,
-                              const DeviceMemoryBase &gpu_src,
-                              uint64_t size) = 0;
+                              const DeviceMemoryBase &gpu_src, uint64_t size) {
+    return absl::UnimplementedError(
+        "Memcpy from device to device is not implemented for this "
+        "stream.");
+  }
+
   absl::Status MemcpyD2D(DeviceMemoryBase *gpu_dst,
                          const DeviceMemoryBase &gpu_src, uint64_t size) {
     return Memcpy(gpu_dst, gpu_src, size);
@@ -260,6 +264,14 @@ class Stream {
   // platform driver.
   virtual absl::Status Launch(const ThreadDim &thread_dims,
                               const BlockDim &block_dims, const Kernel &k,
+                              const KernelArgs &args) = 0;
+
+  // Launches a data parallel kernel with the given thread/block
+  // dimensionality and already-packed args/sizes to pass to the underlying
+  // platform driver.
+  virtual absl::Status Launch(const ThreadDim &thread_dims,
+                              const BlockDim &block_dims,
+                              const ClusterDim &cluster_dims, const Kernel &k,
                               const KernelArgs &args) = 0;
 };
 
