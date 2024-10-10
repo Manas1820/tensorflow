@@ -15,8 +15,10 @@ limitations under the License.
 
 #include "xla/service/gpu/gpu_compiler.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -25,9 +27,11 @@ limitations under the License.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/match.h"
 #include "absl/strings/string_view.h"
 #include "absl/strings/substitute.h"
 #include "xla/autotune_results.pb.h"
@@ -55,6 +59,7 @@ limitations under the License.
 #include "xla/tests/filecheck.h"
 #include "xla/tests/hlo_test_base.h"
 #include "xla/tests/literal_test_util.h"
+#include "xla/tests/verified_hlo_module.h"
 #include "xla/tsl/lib/core/status_test_util.h"
 #include "xla/xla_data.pb.h"
 #include "tsl/platform/casts.h"
@@ -84,6 +89,13 @@ class GpuCompilerTest : public HloTestBase {
     TF_RETURN_IF_ERROR(ScheduleGpuModule(module, 4, gpu_device_info).status());
     return tensorflow::down_cast<GpuCompiler*>(compiler)
         ->RunPostSchedulingPipelines(module, 4 * 1024 * 1024, gpu_device_info);
+  }
+
+  const stream_executor::GpuComputeCapability& GpuComputeComp() {
+    return backend()
+        .default_stream_executor()
+        ->GetDeviceDescription()
+        .gpu_compute_capability();
   }
 };
 
@@ -970,6 +982,10 @@ using GpuCompilerPassTest = GpuCompilerTest;
 
 TEST_F(GpuCompilerPassTest,
        GpuCompilerRunsTritonGemmRewriterByDefaultFromAmpere) {
+  if (std::holds_alternative<se::RocmComputeCapability>(GpuComputeComp())) {
+    GTEST_SKIP() << "TritonGemmRewriter disabled for ROCm until autotuner "
+                 << "is included.";
+  }
   auto cc = backend()
                 .default_stream_executor()
                 ->GetDeviceDescription()
@@ -1038,6 +1054,101 @@ ENTRY main {
 
   EXPECT_EQ(custom_kernel_fusion_rewriter_has_run,
             expect_custom_kernel_fusion_rewriter_has_run);
+}
+
+class PassOrderTest : public GpuCompilerTest {
+ public:
+  void SetDebugOptions(const DebugOptions& options) {
+    HloModuleConfig config = GetModuleConfigForTest();
+    config.set_debug_options(options);
+    CompileModule(config);
+  }
+
+  // Fails if any of the passes with names matching the regular expression
+  // first_pass_regex run after any of the passes matching last_pass_regex or if
+  // none of the executed passes matches first_pass_regex or last_pass_regex.
+  void VerifyPassOrder(absl::string_view first_pass_regex,
+                       absl::string_view last_pass_regex) {
+    if (!optimized_module_) {
+      CompileModule(GetModuleConfigForTest());
+    }
+    int first_pass_latest_run = -1;
+    int last_pass_earliest_run = std::numeric_limits<int>::max();
+    int run_index = 0;
+    for (const HloPassMetadata& pass_metadata :
+         optimized_module_->metadata()->proto().pass_metadata()) {
+      if (RE2::FullMatch(pass_metadata.pass_name(), first_pass_regex)) {
+        VLOG(2) << "Pass " << pass_metadata.pass_name()
+                << " matches first_pass_regex." << std::endl;
+        first_pass_latest_run = std::max(first_pass_latest_run, run_index);
+      }
+      if (RE2::FullMatch(pass_metadata.pass_name(), last_pass_regex)) {
+        VLOG(2) << "Pass " << pass_metadata.pass_name()
+                << " matches last_pass_regex." << std::endl;
+        last_pass_earliest_run = std::min(last_pass_earliest_run, run_index);
+      }
+      ++run_index;
+    }
+
+    EXPECT_GT(first_pass_latest_run, -1)
+        << "Did not run a pass matching " << first_pass_regex;
+    EXPECT_LT(last_pass_earliest_run, std::numeric_limits<int>::max())
+        << "Did not run a pass matching " << last_pass_regex;
+    EXPECT_LE(first_pass_latest_run, last_pass_earliest_run)
+        << "One or more passes matching " << first_pass_regex
+        << " ran after passes matching " << last_pass_regex;
+  }
+
+ private:
+  void CompileModule(const HloModuleConfig& config) {
+    constexpr absl::string_view constant_module = R"(
+ENTRY main {
+  ROOT constant = f32[] constant(0)
+})";
+    TF_ASSERT_OK_AND_ASSIGN(
+        std::unique_ptr<VerifiedHloModule> module,
+        ParseAndReturnVerifiedModule(constant_module, config));
+    TF_ASSERT_OK_AND_ASSIGN(optimized_module_,
+                            GetOptimizedModule(std::move(module)));
+  }
+
+  std::unique_ptr<HloModule> optimized_module_;
+};
+
+TEST_F(PassOrderTest, PassesAreRunInCorrectOrder) {
+  VerifyPassOrder(/*first_pass_regex=*/"layout-assignment",
+                  /*last_pass_regex=*/"priority-fusion");
+  VerifyPassOrder(/*first_pass_regex=*/"layout-assignment",
+                  /*last_pass_regex=*/"layout_normalization");
+  VerifyPassOrder(/*first_pass_regex=*/"host-offload-legalize",
+                  /*last_pass_regex=*/"layout_normalization");
+}
+
+TEST_F(PassOrderTest, FusionBlockLevelRewriterRunsAfterAllFusionPasses) {
+  auto cc = backend()
+                .default_stream_executor()
+                ->GetDeviceDescription()
+                .cuda_compute_capability();
+  if (!cc.IsAtLeastAmpere()) {
+    GTEST_SKIP() << "FusionBlockLevelRewriter requires Ampere+ to run.";
+  }
+
+  DebugOptions debug_options = GetDebugOptionsForTest();
+  debug_options.set_xla_gpu_experimental_enable_fusion_block_level_rewriter(
+      true);
+  SetDebugOptions(debug_options);
+
+  VerifyPassOrder(/*first_pass_regex=*/".*fusion.*",
+                  /*last_pass_regex=*/"fusion-block-level-rewriter");
+}
+
+TEST_F(PassOrderTest, CollectivePipelinerRunsAfterCollectiveQuantizer) {
+  DebugOptions options = GetDebugOptionsForTest();
+  options.set_xla_gpu_enable_pipelined_collectives(true);
+  SetDebugOptions(options);
+
+  VerifyPassOrder(/*first_pass_regex=*/"collective-quantizer",
+                  /*last_pass_regex=*/"collective-pipeliner.*");
 }
 
 }  // namespace

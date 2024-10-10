@@ -771,7 +771,7 @@ cc_library(
         "@local_xla//xla:xla_data_proto_cc",
         "@local_xla//xla/client:sharding_builder",
         "@local_xla//xla/hlo/ir:hlo",
-        "@local_xla//xla/service:hlo_parser",
+        "@local_xla//xla/hlo/parser:hlo_parser",
     ],
 )
 
@@ -1036,9 +1036,9 @@ cc_library(
         "@llvm-project//mlir:Support",
         "@llvm-project//mlir:TranslateLib",
         "@local_xla//xla/hlo/ir:hlo",
+        "@local_xla//xla/hlo/translate/mhlo_to_hlo:type_to_shape",
         "@local_xla//xla/service:hlo_module_config",
         "@local_xla//xla/service:hlo_proto_cc",
-        "@local_xla//xla/translate/mhlo_to_hlo:type_to_shape",
         "@stablehlo//:stablehlo_ops",
     ],
     alwayslink = 1,
@@ -1217,7 +1217,7 @@ cc_library(
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Pass",
-        "@local_tsl//tsl/lib/io:buffered_file",
+        "@local_xla//xla/tsl/lib/io:buffered_file",
     ],
 )
 
@@ -1293,10 +1293,14 @@ tf_cc_test(
         ":serialize_mlir_module_utils",
         ":tensorflow",
         "//tensorflow/compiler/mlir/tensorflow/transforms:tensorflow_passes",
+        "//tensorflow/core:lib",
         "//tensorflow/core:test",
         "//tensorflow/core:test_main",
         "//tensorflow/core/platform:test",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Pass",
         "@llvm-project//mlir:Transforms",
     ],
 )
@@ -1331,6 +1335,8 @@ cc_library(
     ],
     deps = [
         ":dump_mlir_util",
+        "//tensorflow/core:lib",
+        "@com_google_absl//absl/log",
         "@com_google_absl//absl/strings",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
@@ -1385,6 +1391,7 @@ cc_library(
     ],
     deps = [
         ":tensorflow",
+        "//tensorflow/core:framework",
         "//tensorflow/core/protobuf/tpu:compile_metadata_proto_cc",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",
@@ -1395,8 +1402,26 @@ cc_library(
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Support",
         "@local_xla//xla:xla_data_proto_cc",
-        "@local_xla//xla/client:sharding_builder",
-        "@local_xla//xla/service:hlo_parser",
+        "@local_xla//xla/hlo/parser:hlo_parser",
+        "@local_xla//xla/tsl/lib/math:math_util",
+    ],
+)
+
+tf_cc_test(
+    name = "utils/xla_sharding_util_test",
+    srcs = ["utils/xla_sharding_util_test.cc"],
+    deps = [
+        ":serialize_mlir_module_utils",
+        ":tensorflow",
+        ":xla_sharding_util",
+        "//tensorflow/core:test",
+        "//tensorflow/core/protobuf/tpu:topology_proto_cc",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_googletest//:gtest_main",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Support",
+        "@local_tsl//tsl/platform:statusor",
     ],
 )
 

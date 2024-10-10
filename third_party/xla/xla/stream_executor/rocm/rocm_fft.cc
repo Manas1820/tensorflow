@@ -18,17 +18,16 @@ limitations under the License.
 #include <complex>
 
 #include "xla/stream_executor/device_memory.h"
-#include "xla/stream_executor/gpu/gpu_activation.h"
 #include "xla/stream_executor/gpu/gpu_executor.h"
 #include "xla/stream_executor/gpu/gpu_helpers.h"
 #include "xla/stream_executor/gpu/gpu_stream.h"
-#include "xla/stream_executor/platform/dso_loader.h"
+#include "xla/stream_executor/gpu/scoped_activate_context.h"
 #include "xla/stream_executor/platform/initialize.h"
-#include "xla/stream_executor/platform/port.h"
 #include "xla/stream_executor/plugin_registry.h"
 #include "xla/stream_executor/rocm/rocm_complex_converters.h"
 #include "xla/stream_executor/rocm/rocm_platform_id.h"
 #include "xla/stream_executor/stream_executor.h"
+#include "tsl/platform/dso_loader.h"
 #include "tsl/platform/env.h"
 #include "tsl/platform/logging.h"
 
@@ -49,7 +48,7 @@ namespace wrap {
   struct WrapperShim__##__name {                                 \
     template <typename... Args>                                  \
     hipfftResult operator()(GpuExecutor *parent, Args... args) { \
-      gpu::ScopedActivateExecutorContext sac{parent};            \
+      ScopedActivateContext sac{parent};                         \
       return ::__name(args...);                                  \
     }                                                            \
   } __name;
@@ -61,7 +60,7 @@ namespace wrap {
     static const char *kName;                                            \
     using FuncPtrT = std::add_pointer<decltype(::__name)>::type;         \
     static void *GetDsoHandle() {                                        \
-      auto s = internal::CachedDsoLoader::GetHipfftDsoHandle();          \
+      auto s = tsl::internal::CachedDsoLoader::GetHipfftDsoHandle();     \
       return s.value();                                                  \
     }                                                                    \
     static FuncPtrT LoadOrDie() {                                        \
@@ -78,7 +77,7 @@ namespace wrap {
     }                                                                    \
     template <typename... Args>                                          \
     hipfftResult operator()(GpuExecutor *parent, Args... args) {         \
-      gpu::ScopedActivateExecutorContext sac{parent};                    \
+      ScopedActivateContext sac{parent};                                 \
       return DynLoad()(args...);                                         \
     }                                                                    \
   } __name;                                                              \
@@ -156,8 +155,8 @@ bool SetStream(GpuExecutor *parent, hipfftHandle plan, Stream *stream) {
 
 absl::Status ROCMFftPlan::Initialize(
     GpuExecutor *parent, Stream *stream, int rank, uint64_t *elem_count,
-    uint64_t *input_embed, uint64 input_stride, uint64 input_distance,
-    uint64_t *output_embed, uint64 output_stride, uint64 output_distance,
+    uint64_t *input_embed, uint64_t input_stride, uint64_t input_distance,
+    uint64_t *output_embed, uint64_t output_stride, uint64_t output_distance,
     fft::Type type, int batch_count, ScratchAllocator *scratch_allocator) {
   if (IsInitialized()) {
     LOG(FATAL) << "Try to repeatedly initialize.";
@@ -370,9 +369,9 @@ int ROCMFftPlan::GetFftDirection() const {
 }
 
 std::unique_ptr<fft::Plan> ROCMFft::CreateBatchedPlanWithScratchAllocator(
-    Stream *stream, int rank, uint64_t *elem_count, uint64 *input_embed,
-    uint64_t input_stride, uint64 input_distance, uint64 *output_embed,
-    uint64_t output_stride, uint64 output_distance, fft::Type type,
+    Stream *stream, int rank, uint64_t *elem_count, uint64_t *input_embed,
+    uint64_t input_stride, uint64_t input_distance, uint64_t *output_embed,
+    uint64_t output_stride, uint64_t output_distance, fft::Type type,
     bool in_place_fft, int batch_count, ScratchAllocator *scratch_allocator) {
   std::unique_ptr<ROCMFftPlan> fft_plan_ptr{new ROCMFftPlan()};
   absl::Status status = fft_plan_ptr->Initialize(

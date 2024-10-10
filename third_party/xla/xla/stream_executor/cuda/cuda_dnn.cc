@@ -49,7 +49,6 @@ limitations under the License.
 #include "third_party/gpus/cuda/include/cuda.h"
 #include "third_party/gpus/cuda/include/cuda_runtime_api.h"
 #include "third_party/gpus/cuda/include/driver_types.h"
-#include "xla/stream_executor/cuda/cuda_activation.h"
 #include "xla/stream_executor/cuda/cuda_diagnostics.h"
 #include "xla/stream_executor/cuda/cuda_platform_id.h"
 #include "xla/stream_executor/cuda/cudnn_frontend_helpers.h"
@@ -57,24 +56,24 @@ limitations under the License.
 #include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/dnn.h"
 #include "xla/stream_executor/event_based_timer.h"
-#include "xla/stream_executor/gpu/gpu_activation.h"
 #include "xla/stream_executor/gpu/gpu_diagnostics.h"
 #include "xla/stream_executor/gpu/gpu_driver.h"
 #include "xla/stream_executor/gpu/gpu_executor.h"
 #include "xla/stream_executor/gpu/gpu_stream.h"
+#include "xla/stream_executor/gpu/scoped_activate_context.h"
 #include "xla/stream_executor/numeric_options.h"
 #include "xla/stream_executor/platform/initialize.h"
 #include "xla/stream_executor/plugin_registry.h"
 #include "xla/stream_executor/scratch_allocator.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_executor.h"
+#include "xla/tsl/protobuf/dnn.pb.h"
 #include "xla/tsl/util/env_var.h"
 #include "tsl/platform/errors.h"
 #include "tsl/platform/logging.h"
 #include "tsl/platform/status.h"
 #include "tsl/platform/statusor.h"
 #include "tsl/platform/tensor_float_32_utils.h"
-#include "tsl/protobuf/dnn.pb.h"
 
 // clang-format off
 #include "third_party/gpus/cuda/include/library_types.h"
@@ -223,7 +222,7 @@ class CudnnHandle {
   cudnnHandle_t handle() const { return handle_; }
 
  private:
-  gpu::ScopedActivateExecutorContext context_;
+  gpu::ScopedActivateContext context_;
   std::unique_ptr<absl::MutexLock> lock_;
   cudnnHandle_t handle_;  // Not owned.
 };
@@ -489,7 +488,7 @@ void PreloadCudnnSubLibsHelper(dnn::ConvolutionKind kind) {
 CudnnSupport::CudnnSupport(GpuExecutor* parent) : parent_(parent) {}
 
 absl::Status CudnnSupport::Init() {
-  ScopedActivateExecutorContext context(parent_);
+  ScopedActivateContext context(parent_);
 
   // Peek at the last error to give more information in cases of errors.
   cudaError_t cuda_error = cudaPeekAtLastError();
@@ -5241,10 +5240,12 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionF8OperationGraph(
       .set_uid(next_uid());
   amax_s->set_output(true)
       .set_dim({1, 1, 1, 1})
+      .set_stride({1, 1, 1, 1})
       .set_data_type(cudnn_frontend::DataType_t::FLOAT)
       .set_uid(next_uid());
   amax_o->set_output(true)
       .set_dim({1, 1, 1, 1})
+      .set_stride({1, 1, 1, 1})
       .set_data_type(cudnn_frontend::DataType_t::FLOAT)
       .set_uid(next_uid());
 
@@ -5272,6 +5273,202 @@ absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionF8OperationGraph(
     VLOG(4) << "\b workspace size:" << cudnnGraph.Graph().get_workspace_size();
     VLOG(4) << "\b flash attention operation graph: " << cudnnGraph.Graph();
   }
+  return cudnnGraph;
+#else
+  return absl::UnimplementedError(
+      "Cudnn flash attention only supported with Cudnn >= 9.1.0");
+#endif
+}
+
+absl::StatusOr<CudnnGraph> GetCudnnFlashAttentionBackwardF8OperationGraph(
+    dnn::DnnSupport& dnn_support, const dnn::MatmulTensorDescriptor& q_desc,
+    const dnn::MatmulTensorDescriptor& k_desc,
+    const dnn::MatmulTensorDescriptor& p_desc,
+    const dnn::MatmulTensorDescriptor& v_desc,
+    const dnn::MatmulTensorDescriptor& do_desc,
+    const dnn::TensorDescriptor& dq_desc, const dnn::TensorDescriptor& dk_desc,
+    const dnn::TensorDescriptor& dv_desc, double scale,
+    dnn::FMHAMaskKind mask_type) {
+#if CUDNN_VERSION >= 90100
+  if (VLOG_IS_ON(4)) {
+    VLOG(4) << "\n bmm1_grad_gemm1_rhs(q): " << q_desc.ToString()
+            << "\n bmm1_grad_gemm2_rhs(k): " << k_desc.ToString()
+            << "\n bmm2_grad_gemm1_lhs(p): " << p_desc.ToString()
+            << "\n bmm2_grad_gemm2_rhs(v^t): " << v_desc.ToString()
+            << "\n d_output(do): " << do_desc.ToString()
+            << "\n d_bmm1_lhs(dq): " << dq_desc.ToString()
+            << "\n d_bmm1_rhs(dk): " << dk_desc.ToString()
+            << "\n d_bmm2_rhs(dv): " << dv_desc.ToString()
+            << "\n scale: " << scale;
+  }
+  using cudnn_frontend::graph::Tensor_attributes;
+  cudnn_frontend::graph::Graph graph;
+  if (!(q_desc.type() == k_desc.type() && v_desc.type() == do_desc.type() &&
+        do_desc.type() == dq_desc.type() && dq_desc.type() == dk_desc.type() &&
+        dk_desc.type() == dv_desc.type())) {
+    return absl::InternalError("Input datatypes do not match.");
+  }
+
+  auto ioDataType = ToCudnnFrontendDataType(q_desc.type());
+  graph.set_compute_data_type(cudnn_frontend::DataType_t::FLOAT)
+      .set_intermediate_data_type(cudnn_frontend::DataType_t::FLOAT)
+      .set_io_data_type(ioDataType);
+
+  auto next_uid = [uid = 0]() mutable -> int { return CuDnnTensorUID(uid++); };
+
+  std::shared_ptr<Tensor_attributes> q =
+      graph.tensor(Tensor_attributes()
+                       .set_name("Q")
+                       .set_dim(q_desc.GetCudnnCompatibleDimensions(false))
+                       .set_stride(q_desc.GetCudnnCompatibleStrides(false))
+                       .set_uid(next_uid())
+                       .set_data_type(ioDataType));
+  std::shared_ptr<Tensor_attributes> k =
+      graph.tensor(Tensor_attributes()
+                       .set_name("K")
+                       .set_dim(k_desc.GetCudnnCompatibleDimensions(false))
+                       .set_stride(k_desc.GetCudnnCompatibleStrides(false))
+                       .set_uid(next_uid())
+                       .set_data_type(ioDataType));
+  std::shared_ptr<Tensor_attributes> v =
+      graph.tensor(Tensor_attributes()
+                       .set_name("V")
+                       .set_dim(v_desc.GetCudnnCompatibleDimensions(true))
+                       .set_stride(v_desc.GetCudnnCompatibleStrides(true))
+                       .set_uid(next_uid())
+                       .set_data_type(ioDataType));
+  std::shared_ptr<Tensor_attributes> o =
+      graph.tensor(Tensor_attributes()
+                       .set_name("O")
+                       .set_dim(do_desc.GetCudnnCompatibleDimensions(false))
+                       .set_stride(do_desc.GetCudnnCompatibleStrides(false))
+                       .set_uid(next_uid())
+                       .set_data_type(ioDataType));
+  std::shared_ptr<Tensor_attributes> dO =
+      graph.tensor(Tensor_attributes()
+                       .set_name("dO")
+                       .set_dim(do_desc.GetCudnnCompatibleDimensions(false))
+                       .set_stride(do_desc.GetCudnnCompatibleStrides(false))
+                       .set_uid(next_uid())
+                       .set_data_type(ioDataType));
+
+  auto p_dims = p_desc.GetCudnnCompatibleDimensions(false);
+  auto p_strides = p_desc.GetCudnnCompatibleStrides(false);
+  std::vector<int64_t> p_reduction_dims(p_dims.begin(), p_dims.end() - 1);
+  p_reduction_dims.push_back(1);
+
+  // Divide every stride by the last dim value.
+  std::vector<int64_t> p_reduction_strides;
+  p_reduction_strides.reserve(p_strides.size());
+  int64_t p_reduced_dim_len = p_dims.back();
+  for (auto stride : p_strides) {
+    p_reduction_strides.push_back(stride / p_reduced_dim_len);
+  }
+  p_reduction_strides[3] = 1;
+  std::shared_ptr<Tensor_attributes> Stats =
+      graph.tensor(Tensor_attributes()
+                       .set_name("Stats")
+                       .set_dim(p_reduction_dims)
+                       .set_stride(p_reduction_strides)
+                       .set_uid(next_uid())
+                       .set_data_type(cudnn_frontend::DataType_t::FLOAT));
+
+  auto descale_q =
+      graph.tensor(Tensor_attributes()
+                       .set_name("Descale_Q")
+                       .set_dim({1, 1, 1, 1})
+                       .set_stride({1, 1, 1, 1})
+                       .set_uid(next_uid())
+                       .set_data_type(cudnn_frontend::DataType_t::FLOAT));
+  auto descale_k = graph.tensor_like(descale_q, "Descale_K");
+  auto descale_v = graph.tensor_like(descale_q, "Descale_V");
+  auto descale_s = graph.tensor_like(descale_q, "Descale_S");
+  auto descale_o = graph.tensor_like(descale_q, "Descale_O");
+  auto descale_dO = graph.tensor_like(descale_q, "Descale_dO");
+  auto descale_dP = graph.tensor_like(descale_q, "Descale_dP");
+
+  auto scale_s = graph.tensor_like(descale_q, "Scale_S");
+  auto scale_dP = graph.tensor_like(descale_q, "Scale_dP");
+  auto scale_dQ = graph.tensor_like(descale_q, "Scale_dQ");
+  auto scale_dK = graph.tensor_like(descale_q, "Scale_dK");
+  auto scale_dV = graph.tensor_like(descale_q, "Scale_dV");
+
+  descale_k->set_uid(next_uid());
+  descale_v->set_uid(next_uid());
+  descale_s->set_uid(next_uid());
+  descale_o->set_uid(next_uid());
+  descale_dO->set_uid(next_uid());
+  descale_dP->set_uid(next_uid());
+
+  scale_s->set_uid(next_uid());
+  scale_dP->set_uid(next_uid());
+  scale_dQ->set_uid(next_uid());
+  scale_dK->set_uid(next_uid());
+  scale_dV->set_uid(next_uid());
+
+  bool is_causal = mask_type == dnn::FMHAMaskKind::CAUSAL;
+  auto sdpa_fp8_backwards_options =
+      cudnn_frontend::graph::SDPA_fp8_backward_attributes()
+          .set_name("sdpa_fp8_backward")
+          .set_causal_mask(is_causal)
+          .set_attn_scale(scale);
+
+  auto [dQ, dK, dV, Amax_dQ, Amax_dK, Amax_dV, Amax_dP] =
+      graph.sdpa_fp8_backward(q, k, v, o, dO, Stats, descale_q, descale_k,
+                              descale_v, descale_o, descale_dO, descale_s,
+                              descale_dP, scale_s, scale_dQ, scale_dK, scale_dV,
+                              scale_dP, sdpa_fp8_backwards_options);
+
+  dQ->set_output(true)
+      .set_dim(dq_desc.dimensions())
+      .set_stride(dq_desc.GetLogicalStrides())
+      .set_name("dQ")
+      .set_uid(next_uid())
+      .set_data_type(ioDataType);
+  dK->set_output(true)
+      .set_dim(dk_desc.dimensions())
+      .set_stride(dk_desc.GetLogicalStrides())
+      .set_name("dK")
+      .set_uid(next_uid())
+      .set_data_type(ioDataType);
+  dV->set_output(true)
+      .set_dim(dv_desc.dimensions())
+      .set_stride(dv_desc.GetLogicalStrides())
+      .set_name("dV")
+      .set_uid(next_uid())
+      .set_data_type(ioDataType);
+  Amax_dQ->set_output(true)
+      .set_dim({1, 1, 1, 1})
+      .set_stride({1, 1, 1, 1})
+      .set_data_type(cudnn_frontend::DataType_t::FLOAT)
+      .set_uid(next_uid());
+  Amax_dK->set_output(true)
+      .set_dim({1, 1, 1, 1})
+      .set_stride({1, 1, 1, 1})
+      .set_data_type(cudnn_frontend::DataType_t::FLOAT)
+      .set_uid(next_uid());
+  Amax_dV->set_output(true)
+      .set_dim({1, 1, 1, 1})
+      .set_stride({1, 1, 1, 1})
+      .set_data_type(cudnn_frontend::DataType_t::FLOAT)
+      .set_uid(next_uid());
+  Amax_dP->set_output(true)
+      .set_dim({1, 1, 1, 1})
+      .set_stride({1, 1, 1, 1})
+      .set_data_type(cudnn_frontend::DataType_t::FLOAT)
+      .set_uid(next_uid());
+
+  CudnnGraph cudnnGraph(std::move(graph));
+  TF_RETURN_IF_ERROR(cudnnGraph.Prepare(
+      dnn_support, NumericOptions{/*require_determinism=*/false,
+                                  /*allow_tf32=*/true}));
+  TF_RETURN_IF_ERROR(cudnnGraph.Build(dnn_support, /*plan_id=*/std::nullopt));
+
+  if (VLOG_IS_ON(4)) {
+    VLOG(4) << "\b workspace size:" << cudnnGraph.Graph().get_workspace_size();
+    VLOG(4) << "\b flash attention f8 operation backward graph: " << graph;
+  }
+
   return cudnnGraph;
 #else
   return absl::UnimplementedError(
@@ -7162,19 +7359,6 @@ CudnnSupport::NormRunnerFromDesc(
 #endif  // CUDNN_VERSION >= 8905
 }
 
-// Returns the offset to increment for the dropout rng.
-// The offset is used by runner to increment by the offset_increment for
-// every call to cudnn fmha kernel to make sure dropout mask is evenly
-// distributed. The recommended offset value by cudnn is max_sequence_length
-// * max_sequence_length / number_of_threads_launched in kernel.
-int64_t GetDropoutRngOffset(std::vector<int64_t>& intermediate_shape) {
-  int64_t kv_seq_len = intermediate_shape[intermediate_shape.size() - 1];
-  int64_t q_seq_len = intermediate_shape[intermediate_shape.size() - 2];
-  int64_t max_seq_len = std::max(q_seq_len, kv_seq_len);
-  int64_t cudnn_mha_num_threads = 256;
-  return max_seq_len * max_seq_len / cudnn_mha_num_threads;
-}
-
 bool CudnnSupport::GetRnnAlgorithms(
     std::vector<dnn::AlgorithmDesc>* out_algorithms) {
   PreloadCudnnSubLibs(PreloadCudnnType::Rnn);
@@ -8255,7 +8439,8 @@ absl::Status CudnnGraph::Build(dnn::DnnSupport& dnn_support,
 }
 
 absl::Status CudnnGraph::Execute(Stream& stream,
-                                 absl::Span<DeviceMemoryBase> operands) const {
+                                 absl::Span<DeviceMemoryBase> operands,
+                                 int64_t local_device_ordinal) const {
   std::unordered_map<int64_t, void*> tensor_to_ptr_map;
   absl::Span<DeviceMemoryBase> operands_without_workspace = operands;
   DeviceMemoryBase workspace;
@@ -8273,9 +8458,10 @@ absl::Status CudnnGraph::Execute(Stream& stream,
 
   if (dropout_rng_offset_increment_ > 0) {
 #if CUDNN_VERSION >= 8800
+    UpdateDropoutState(local_device_ordinal);
     tensor_to_ptr_map[next_uid()] = (void*)&dropout_rng_seed_;
-    current_dropout_rng_offset_ += dropout_rng_offset_increment_;
-    tensor_to_ptr_map[next_uid()] = (void*)&current_dropout_rng_offset_;
+    tensor_to_ptr_map[next_uid()] =
+        (void*)&current_dropout_rng_offset_[local_device_ordinal];
 #else
     return absl::UnimplementedError(
         "Cudnn dropout offset and seed are only supported with Cudnn >= "

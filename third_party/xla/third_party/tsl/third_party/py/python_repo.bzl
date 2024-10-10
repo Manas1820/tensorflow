@@ -34,13 +34,11 @@ Please check python_init_repositories() in your WORKSPACE file.
 
     requirements_with_local_wheels = str(requirements)
 
-    local_wheels_dir = ctx.os.environ.get("LOCAL_WHEELS_DIR", "")
-    if ctx.attr.local_wheel_workspaces or local_wheels_dir:
+    if ctx.attr.local_wheel_workspaces:
         local_wheel_requirements = _get_injected_local_wheels(
             ctx,
             version,
             ctx.attr.local_wheel_workspaces,
-            local_wheels_dir,
         )
         requirements_content = [ctx.read(requirements)] + local_wheel_requirements
         merged_requirements_content = "\n".join(requirements_content)
@@ -55,6 +53,13 @@ Please check python_init_repositories() in your WORKSPACE file.
             merged_requirements_content,
         )
 
+    use_pywrap_rules = bool(
+        ctx.os.environ.get("USE_PYWRAP_RULES", False),
+    )
+
+    if use_pywrap_rules:
+        print("!!!Using pywrap rules instead of directly creating .so objects!!!")
+
     ctx.file(
         "py_version.bzl",
         """
@@ -64,12 +69,14 @@ WHEEL_NAME = "{wheel_name}"
 WHEEL_COLLAB = "{wheel_collab}"
 REQUIREMENTS = "{requirements}"
 REQUIREMENTS_WITH_LOCAL_WHEELS = "{requirements_with_local_wheels}"
+USE_PYWRAP_RULES = {use_pywrap_rules}
 """.format(
             version = version,
             wheel_name = wheel_name,
             wheel_collab = wheel_collab,
             requirements = str(requirements),
             requirements_with_local_wheels = requirements_with_local_wheels,
+            use_pywrap_rules = use_pywrap_rules,
         ),
     )
 
@@ -118,8 +125,7 @@ def _parse_python_version(version_str):
 def _get_injected_local_wheels(
         ctx,
         py_version,
-        local_wheel_workspaces,
-        local_wheels_dir):
+        local_wheel_workspaces):
     local_wheel_requirements = []
     py_ver_marker = "-cp%s-" % py_version.replace(".", "")
     py_major_ver_marker = "-py%s-" % py_version.split(".")[0]
@@ -140,18 +146,6 @@ def _get_injected_local_wheels(
                     ctx.attr.local_wheel_inclusion_list,
                     ctx.attr.local_wheel_exclusion_list,
                 )
-    if local_wheels_dir:
-        dist_folder_path = ctx.path(local_wheels_dir)
-        if dist_folder_path.exists:
-            dist_wheels = dist_folder_path.readdir()
-            _process_dist_wheels(
-                dist_wheels,
-                wheels,
-                py_ver_marker,
-                py_major_ver_marker,
-                ctx.attr.local_wheel_inclusion_list,
-                ctx.attr.local_wheel_exclusion_list,
-            )
 
     for wheel_name, wheel_path in wheels.items():
         local_wheel_requirements.append(
@@ -200,6 +194,7 @@ python_repository = repository_rule(
         "HERMETIC_PYTHON_VERSION",
         "WHEEL_NAME",
         "WHEEL_COLLAB",
+        "USE_PYWRAP_RULES",
     ],
     local = True,
 )

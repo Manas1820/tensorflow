@@ -53,8 +53,8 @@ limitations under the License.
 #include "tensorflow/compiler/tf2xla/xla_context.h"
 #include "tensorflow/compiler/tf2xla/xla_helpers.h"
 #include "xla/client/client_library.h"
-#include "xla/client/xla_builder.h"
-#include "xla/client/xla_computation.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/hlo/builder/xla_computation.h"
 #include "xla/protobuf_util.h"
 #include "xla/service/hlo.pb.h"
 #include "xla/shape_util.h"
@@ -729,7 +729,7 @@ std::vector<std::string> GetValidControlRets(
   // the map with nodes in FunctionDef control_ret_nodes and later query it
   // using the nodes in `graph`. The Node pointers would be different but the
   // Node name is expected to remain the same between the two.
-  absl::flat_hash_map<const string, int> control_ret_nodes_map;
+  absl::flat_hash_map<string, int> control_ret_nodes_map;
   for (int i = 0; i < orig_control_ret_nodes.size(); ++i) {
     const Node* n = orig_control_ret_nodes[i];
     control_ret_nodes_map[n->name()] = i;

@@ -1620,15 +1620,6 @@ func.func @op_subtract(%arg0: tensor<f32>, %arg1: tensor<f32>) -> tensor<f32> {
   func.return %0 : tensor<f32>
 }
 
-// CHECK-LABEL: "op_tan"
-func.func @op_tan(%arg0: tensor<f32>) -> tensor<f32> {
-  // CHECK: "stablehlo.custom_call"([[ARG0:%arg[0-9]+]])  <{
-  // CHECK-SAME:   call_target_name = "mhlo.tan"}> {mhlo.attributes = {}, mhlo.version = 1 : i64}
-  // CHECK-SAME: (tensor<f32>) -> tensor<f32>
-  %0 = "mhlo.tan"(%arg0) : (tensor<f32>) -> tensor<f32>
-  func.return %0 : tensor<f32>
-}
-
 // CHECK-LABEL: "op_tanh"
 func.func @op_tanh(%arg0: tensor<f32>) -> tensor<f32> {
   // CHECK: "stablehlo.tanh"([[ARG0:%arg[0-9]+]]) : (tensor<f32>) -> tensor<f32>
@@ -1812,6 +1803,20 @@ func.func @type_ui64(%arg0: tensor<ui64>, %arg1: tensor<ui64>) -> tensor<ui64> {
   // CHECK: "stablehlo.add"([[ARG0:%arg[0-9]+]], [[ARG1:%arg[0-9]+]]) : (tensor<ui64>, tensor<ui64>) -> tensor<ui64>
   %0 = "mhlo.add"(%arg0, %arg1) : (tensor<ui64>, tensor<ui64>) -> tensor<ui64>
   func.return %0 : tensor<ui64>
+}
+
+// CHECK-LABEL: "type_f8E3M4"
+func.func @type_f8E3M4(%arg0: tensor<f8E3M4>, %arg1: tensor<f8E3M4>) -> tensor<f8E3M4> {
+  // CHECK: "stablehlo.add"([[ARG0:%arg[0-9]+]], [[ARG1:%arg[0-9]+]]) : (tensor<f8E3M4>, tensor<f8E3M4>) -> tensor<f8E3M4>
+  %0 = "mhlo.add"(%arg0, %arg1) : (tensor<f8E3M4>, tensor<f8E3M4>) -> tensor<f8E3M4>
+  func.return %0 : tensor<f8E3M4>
+}
+
+// CHECK-LABEL: "type_f8E4M3"
+func.func @type_f8E4M3(%arg0: tensor<f8E4M3>, %arg1: tensor<f8E4M3>) -> tensor<f8E4M3> {
+  // CHECK: "stablehlo.add"([[ARG0:%arg[0-9]+]], [[ARG1:%arg[0-9]+]]) : (tensor<f8E4M3>, tensor<f8E4M3>) -> tensor<f8E4M3>
+  %0 = "mhlo.add"(%arg0, %arg1) : (tensor<f8E4M3>, tensor<f8E4M3>) -> tensor<f8E4M3>
+  func.return %0 : tensor<f8E4M3>
 }
 
 // CHECK-LABEL: "type_f8E4M3FN"

@@ -556,7 +556,6 @@ cc_library(
         "tpu_resource_read_for_write.cc",
         "tpu_space_to_depth_pass.cc",
         "tpu_update_embedding_enqueue_op_inputs.cc",
-        "tpu_validate_inputs.cc",
         "update_control_dependencies.cc",
         "verify_suitable_for_graph_export_pass.cc",
         "xla_call_module_deserialization.cc",
@@ -826,9 +825,9 @@ cc_library(
         "@local_xla//xla:shape_util",
         "@local_xla//xla:window_util",
         "@local_xla//xla:xla_data_proto_cc",
+        "@local_xla//xla/hlo/translate/hlo_to_mhlo:hlo_utils",
+        "@local_xla//xla/hlo/translate/mhlo_to_hlo:type_to_shape",
         "@local_xla//xla/service:shape_inference",
-        "@local_xla//xla/translate/hlo_to_mhlo:hlo_utils",
-        "@local_xla//xla/translate/mhlo_to_hlo:type_to_shape",
         "@local_xla//xla/tsl/util:env_var",
     ],
 )
@@ -1069,10 +1068,10 @@ cc_library(
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Support",
         "@local_xla//xla:shape_util",
+        "@local_xla//xla/hlo/translate/mhlo_to_hlo:type_to_shape",
         "@local_xla//xla/mlir_hlo",
         "@local_xla//xla/stream_executor/tpu:c_api_conversions",
         "@local_xla//xla/stream_executor/tpu:tpu_api",
-        "@local_xla//xla/translate/mhlo_to_hlo:type_to_shape",
     ],
 )
 
