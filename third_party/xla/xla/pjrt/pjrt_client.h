@@ -605,6 +605,9 @@ class PjRtClient {
   // Pending completion of b/237720161, `options` is a mandatory argument in
   // most implementations of this interface. They _are_ optional for
   // implementations related to the PJRT C API.
+  //
+  // If `options` are provided, then they override the compile options
+  // from the serialized executable (`serialized`).
   virtual absl::StatusOr<std::unique_ptr<PjRtLoadedExecutable>>
   DeserializeExecutable(absl::string_view serialized,
                         std::optional<CompileOptions> options) {
@@ -762,12 +765,16 @@ class PjRtClient {
   };
 
   // Returns a manager for async transfers into a set of buffers with on-host
-  // shapes defined by 'shape_specs' and optional `device_layouts`. The
-  // `device_layout` is used when non-compact layouts are preferred.
+  // shapes defined by 'shape_specs' and optional `device_layouts`.
+  //
+  // If the desired layout of one or more buffers is not specified in
+  // `device_layouts`, then those buffers will use the default device layout. If
+  // `device_layouts` itself is not specified, then all buffers will use the
+  // default device layout.
   virtual absl::StatusOr<std::unique_ptr<AsyncHostToDeviceTransferManager>>
   CreateBuffersForAsyncHostToDevice(
       absl::Span<const ShapeSpec> shape_specs,
-      std::optional<absl::Span<const Layout>> device_layouts,
+      std::optional<absl::Span<const std::optional<Layout>>> device_layouts,
       PjRtDevice* device) {
     return absl::UnimplementedError(absl::StrCat(
         "CreateBuffersForAsyncHostToDevice with ShapeSpec and Layout is "
@@ -779,7 +786,7 @@ class PjRtClient {
   virtual absl::StatusOr<std::unique_ptr<AsyncHostToDeviceTransferManager>>
   CreateBuffersForAsyncHostToDevice(
       absl::Span<const ShapeSpec> shape_specs,
-      std::optional<absl::Span<const Layout>> device_layouts,
+      std::optional<absl::Span<const std::optional<Layout>>> device_layouts,
       PjRtMemorySpace* memory_space) {
     return absl::UnimplementedError(absl::StrCat(
         "CreateBuffersForAsyncHostToDevice with ShapeSpec and Layout is "

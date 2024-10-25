@@ -6955,8 +6955,8 @@ TEST_F(AlgebraicSimplifierTest, TransposeOfNonCanonicalBatchDotCantSimplify) {
 TEST_F(AlgebraicSimplifierTest, DynamicSliceOfTranspose) {
   // This test is without layouts so we have to set the verifier to be layout
   // insensitive.
-  verifier_layout_sensitive_ = false;
-  instruction_can_change_layout_func_ = {};
+  set_verifier_layout_sensitive(false);
+  set_instruction_can_change_layout_func({});
 
   const char* hlo_string = R"(
     HloModule module
@@ -8715,8 +8715,8 @@ TEST_F(AlgebraicSimplifierTest, ZeroSizedReshapeWithoutLayout) {
 TEST_F(AlgebraicSimplifierTest, DividedByConstantInstructionWithoutLayout) {
   // This test is without layouts so we have to set the verifier to be layout
   // insensitive.
-  verifier_layout_sensitive_ = false;
-  instruction_can_change_layout_func_ = {};
+  set_verifier_layout_sensitive(false);
+  set_instruction_can_change_layout_func({});
 
   Shape shape = ShapeUtil::MakeShape(F32, {});
   shape.clear_layout();
@@ -11025,6 +11025,28 @@ TEST_F(AlgebraicSimplifierTest, CopyBitcastCopy) {
               GmockMatch(m::Bitcast(m::Copy(m::Parameter()))));
 }
 
+TEST_F(AlgebraicSimplifierTest, CopyBitcastCopyDimSize1) {
+  const char* kModuleStr = R"(
+    HloModule m
+
+    ENTRY test {
+     param.8 = f32[9, 1, 12]{2,1,0} parameter(0)
+     transpose.1 = f32[1,12,9]{1,0,2} transpose(param.8), dimensions={1,2,0}
+     copy.4 = f32[1,12,9]{2,1,0} copy(transpose.1)
+     bitcast.15 = f32[1,108]{1,0} bitcast(copy.4)
+     copy.1 = f32[1,108]{0,1} copy(bitcast.15)
+    }
+  )";
+  TF_ASSERT_OK_AND_ASSIGN(auto m, ParseAndReturnVerifiedModule(kModuleStr));
+  AlgebraicSimplifierOptions options;
+  options.set_is_layout_sensitive(true);
+  AlgebraicSimplifier simplifier(options);
+  ASSERT_TRUE(simplifier.Run(m.get()).value());
+  EXPECT_THAT(
+      m->entry_computation()->root_instruction(),
+      GmockMatch(m::Bitcast(m::Bitcast(m::Copy(m::Bitcast(m::Parameter()))))));
+}
+
 TEST_F(AlgebraicSimplifierTest, CopyBitcastCopy2) {
   const char* kModuleStr = R"(
     HloModule m
@@ -12081,8 +12103,8 @@ TEST_F(AlgebraicSimplifierTest, PreserveSharding) {
 
 // Move parameter from the LHS of a dot to the RHS.
 TEST_F(AlgebraicSimplifierTest, SwapDotOperands) {
-  verifier_layout_sensitive_ = false;
-  instruction_can_change_layout_func_ = {};
+  set_verifier_layout_sensitive(false);
+  set_instruction_can_change_layout_func({});
   const std::string hlo_string = R"(
 HloModule main
 

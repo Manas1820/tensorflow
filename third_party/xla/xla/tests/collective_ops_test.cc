@@ -53,7 +53,7 @@ class CollectiveOpsTest : public HloTestBase {
   }
 
  protected:
-  DebugOptions GetDebugOptionsForTest() override {
+  DebugOptions GetDebugOptionsForTest() const override {
     DebugOptions debug_options = HloTestBase::GetDebugOptionsForTest();
     // Disable async->sync collective conversion pass to enable unit testing
     // of async collectives.
@@ -402,10 +402,9 @@ XLA_TEST_F(CollectiveOpsTest,
 
   HloModuleConfig config = GetModuleConfigForTest(/*replica_count=*/2);
   auto executable =
-      test_runner_
-          .CreateExecutable(MakeCrsModule(input_literal.shape(),
-                                          /*replica_groups=*/{}, config),
-                            /*run_hlo_passes=*/true)
+      CreateExecutable(MakeCrsModule(input_literal.shape(),
+                                     /*replica_groups=*/{}, config),
+                       /*run_hlo_passes=*/true)
           .value();
   std::vector<int64_t> devices = {0, 1};
   auto device_assn = MakeDeviceAssn(devices);
