@@ -52,6 +52,7 @@ xla_cc_test(
     srcs = ["tracked_tfrt_cpu_device_buffer_test.cc"],
     deps = [
         ":tracked_tfrt_cpu_device_buffer",
+        "//xla:util",
         "//xla/service/cpu:cpu_event",
         "//xla/tsl/concurrency:async_value",
         "@com_google_googletest//:gtest_main",
@@ -162,6 +163,7 @@ cc_library(
         "//xla/pjrt:compile_options_proto_cc",
         "//xla/pjrt:host_callback",
         "//xla/pjrt:host_memory_spaces",
+        "//xla/pjrt:layout_mode",
         "//xla/pjrt:mlir_to_hlo",
         "//xla/pjrt:pjrt_client",
         "//xla/pjrt:pjrt_common",
@@ -248,6 +250,7 @@ xla_cc_test(
         "//xla/pjrt:pjrt_client",
         "//xla/pjrt:pjrt_executable",
         "//xla/pjrt/plugin/xla_cpu:cpu_client_options",
+        "//xla/pjrt/plugin/xla_cpu:xla_cpu_pjrt_client",
         "//xla/service:hlo_proto_cc",
         "//xla/tests:literal_test_util",
         "//xla/tsl/lib/core:status_test_util",

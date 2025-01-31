@@ -293,7 +293,9 @@ cc_library(
     srcs = ["collective_permute_decomposer.cc"],
     hdrs = ["collective_permute_decomposer.h"],
     deps = [
+        ":call_graph",
         ":collective_ops_utils",
+        ":pattern_matcher",
         ":source_target_pairs",
         "//xla:shape_util",
         "//xla:xla_data_proto_cc",

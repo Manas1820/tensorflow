@@ -205,7 +205,8 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
 
   opts.set_xla_gpu_collective_permute_decomposer_threshold(
       std::numeric_limits<int64_t>::max());
-  opts.set_xla_gpu_experimental_enable_pipeline_parallelism_opt(false);
+  opts.set_xla_gpu_experimental_pipeline_parallelism_opt_level(
+      DebugOptions::PIPELINE_PARALLELISM_OPT_LEVEL_DISABLE);
 
   opts.set_xla_partitioning_algorithm(
       DebugOptions::PARTITIONING_ALGORITHM_NOOP);
@@ -491,6 +492,19 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
             debug_options
                 ->mutable_xla_gpu_analytical_latency_estimator_options();
         parse_xla_backend_extra_options(options_map, comma_separated_values);
+        return true;
+      };
+
+  // Custom "sub-parser" lambda for
+  // xla_gpu_experimental_pipeline_parallelism_opt_level.
+  auto setter_for_xla_gpu_experimental_pipeline_parallelism_opt_level =
+      [debug_options](const std::string& value) {
+        DebugOptions::PipelineParallelismOptLevel level;
+        if (!DebugOptions::PipelineParallelismOptLevel_Parse(value, &level)) {
+          return false;
+        }
+        debug_options->set_xla_gpu_experimental_pipeline_parallelism_opt_level(
+            level);
         return true;
       };
 
@@ -1667,11 +1681,10 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       debug_options->xla_gpu_collective_permute_decomposer_threshold(),
       "Collective permute decomposer threshold."));
   flag_list->push_back(tsl::Flag(
-      "xla_gpu_experimental_enable_pipeline_parallelism_opt",
-      bool_setter_for(
-          &DebugOptions::
-              set_xla_gpu_experimental_enable_pipeline_parallelism_opt),
-      debug_options->xla_gpu_experimental_enable_pipeline_parallelism_opt(),
+      "xla_gpu_experimental_pipeline_parallelism_opt_level",
+      setter_for_xla_gpu_experimental_pipeline_parallelism_opt_level,
+      DebugOptions::PipelineParallelismOptLevel_Name(
+          debug_options->xla_gpu_experimental_pipeline_parallelism_opt_level()),
       "Experimental optimizations for SPMD-based pipeline parallelism on "
       "GPU."));
   flag_list->push_back(tsl::Flag(
@@ -2180,37 +2193,30 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
 
 // Allocates flag_values and flag_objects; this function must not be called more
 // than once - its call done via call_once.
-static void AllocateFlags(DebugOptions* defaults, bool parse_xla_flags) {
+static void AllocateFlags(DebugOptions* defaults) {
   if (defaults == nullptr) {
     defaults = new DebugOptions(DefaultDebugOptionsIgnoringFlags());
   }
   flag_values = defaults;
   flag_objects = new std::vector<tsl::Flag>();
   MakeDebugOptionsFlags(flag_objects, flag_values);
-  if (parse_xla_flags) {
-    ParseFlagsFromEnvAndDieIfUnknown("XLA_FLAGS", *flag_objects);
-  }
+  ParseFlagsFromEnvAndDieIfUnknown("XLA_FLAGS", *flag_objects);
 }
 
 void AppendDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
                              DebugOptions* debug_options) {
-  absl::call_once(flags_init, &AllocateFlags, debug_options,
-                  /*parse_xla_flags =*/true);
+  absl::call_once(flags_init, &AllocateFlags, debug_options);
   flag_list->insert(flag_list->end(), flag_objects->begin(),
                     flag_objects->end());
 }
 
 xla::DebugOptions GetDebugOptionsFromFlags() {
-  absl::call_once(flags_init, &AllocateFlags, nullptr,
-                  /*parse_xla_flags =*/false);
-  ParseFlagsFromEnvAndDieIfUnknown("XLA_FLAGS", *flag_objects,
-                                   /*reset_envvar=*/true);
+  absl::call_once(flags_init, &AllocateFlags, nullptr);
   return *flag_values;
 }
 
 void ResetThreadLocalFuel() {
-  absl::call_once(flags_init, &AllocateFlags, nullptr,
-                  /*parse_xla_flags =*/true);
+  absl::call_once(flags_init, &AllocateFlags, nullptr);
 
   thread_fuel = std::make_unique<
       absl::node_hash_map<std::string, std::atomic<int64_t>>>();
@@ -2221,8 +2227,7 @@ void ResetThreadLocalFuel() {
 }
 
 bool ConsumeFuel(absl::string_view pass, bool* just_ran_out) {
-  absl::call_once(flags_init, &AllocateFlags, nullptr,
-                  /*parse_xla_flags =*/true);
+  absl::call_once(flags_init, &AllocateFlags, nullptr);
   if (just_ran_out != nullptr) {
     *just_ran_out = false;
   }
