@@ -640,13 +640,6 @@ class PjRtClient {
     return Unimplemented("Loading executable not supported.");
   }
 
-  // Creates a buffer on the device without initializing or copying any data.
-  ABSL_DEPRECATED("Use CreateUninitializedBuffer(Shape, PjRtMemorySpace*)")
-  virtual absl::StatusOr<std::unique_ptr<PjRtBuffer>> CreateUninitializedBuffer(
-      const Shape& shape, PjRtDevice* device) {
-    return Unimplemented("CreateUninitializedBuffer is not supported.");
-  }
-
   // Creates a buffer in the given memory space without initializing or copying
   // any data.
   virtual absl::StatusOr<std::unique_ptr<PjRtBuffer>> CreateUninitializedBuffer(
@@ -659,19 +652,6 @@ class PjRtClient {
   virtual absl::StatusOr<std::unique_ptr<PjRtBuffer>> CreateErrorBuffer(
       absl::Status error, const Shape& shape, PjRtMemorySpace* memory) {
     return Unimplemented("CreateErrorBuffer not supported.");
-  }
-
-  // Creates buffer in the given device that carries an error future without
-  // allocating memory.
-  ABSL_DEPRECATED(
-      "Use CreateErrorBuffer(absl::Status, Shape, PjRtMemorySpace*)")
-  virtual absl::StatusOr<std::unique_ptr<PjRtBuffer>> CreateErrorBuffer(
-      absl::Status error, const Shape& shape, PjRtDevice* device) {
-    auto default_memory_space = device->default_memory_space();
-    if (!default_memory_space.ok()) {
-      return default_memory_space.status();
-    }
-    return CreateErrorBuffer(std::move(error), shape, *default_memory_space);
   }
 
   // Gets the pointer to the topology description held by the client.
@@ -787,18 +767,6 @@ class PjRtClient {
   CreateBuffersForAsyncHostToDevice(
       absl::Span<const ShapeSpec> shape_specs,
       std::optional<absl::Span<const std::optional<Layout>>> device_layouts,
-      PjRtDevice* device) {
-    return absl::UnimplementedError(absl::StrCat(
-        "CreateBuffersForAsyncHostToDevice with ShapeSpec and Layout is "
-        "not implemented on platform: ",
-        platform_name()));
-  }
-
-  // Variant of CreateBuffersForAsyncHostToDevice with PjRtMemorySpace.
-  virtual absl::StatusOr<std::unique_ptr<AsyncHostToDeviceTransferManager>>
-  CreateBuffersForAsyncHostToDevice(
-      absl::Span<const ShapeSpec> shape_specs,
-      std::optional<absl::Span<const std::optional<Layout>>> device_layouts,
       PjRtMemorySpace* memory_space) {
     return absl::UnimplementedError(absl::StrCat(
         "CreateBuffersForAsyncHostToDevice with ShapeSpec and Layout is "
@@ -810,18 +778,16 @@ class PjRtClient {
   // shapes 'shapes'.
   virtual absl::StatusOr<std::unique_ptr<AsyncHostToDeviceTransferManager>>
   CreateBuffersForAsyncHostToDevice(absl::Span<const Shape> shapes,
-                                    PjRtDevice* device) {
-    return Unimplemented(
-        "CreateBuffersForAsyncHostToDevice with on host is not implemented.");
-  }
-
-  // Variant of CreateBuffersForAsyncHostToDevice with PjRtMemorySpace.
-  virtual absl::StatusOr<std::unique_ptr<AsyncHostToDeviceTransferManager>>
-  CreateBuffersForAsyncHostToDevice(absl::Span<const Shape> shapes,
                                     PjRtMemorySpace* memory_space) {
-    return Unimplemented(
-        "CreateBuffersForAsyncHostToDevice with PjRtMemorySpace is not "
-        "implemented.");
+    absl::InlinedVector<PjRtClient::ShapeSpec, 4> shape_specs;
+    shape_specs.reserve(shapes.size());
+    for (const auto& shape : shapes) {
+      shape_specs.emplace_back(ShapeSpec{
+          shape.element_type(), DimensionVector(shape.dimensions().begin(),
+                                                shape.dimensions().end())});
+    }
+    return CreateBuffersForAsyncHostToDevice(
+        shape_specs, /*device_layouts=*/std::nullopt, memory_space);
   }
 
   // Describes the semantics the caller to BufferFromHostBuffer expects from the
@@ -878,33 +844,6 @@ class PjRtClient {
       std::optional<absl::Span<int64_t const>> byte_strides,
       HostBufferSemantics host_buffer_semantics,
       absl::AnyInvocable<void() &&> on_done_with_host_buffer,
-      PjRtDevice* device) {
-    return Unimplemented("BufferFromHostBuffer is not implemented.");
-  }
-
-  // Variant of BufferFromHostBuffer that takes an optional device layout. It is
-  // used when non-compact layout is preferred.
-  // TODO(b/275645543): remove BufferFromHostBuffer without optional device
-  // layout after all the inherited classes and call sites are updated.
-  virtual absl::StatusOr<std::unique_ptr<PjRtBuffer>> BufferFromHostBuffer(
-      const void* data, PrimitiveType type, absl::Span<int64_t const> dims,
-      std::optional<absl::Span<int64_t const>> byte_strides,
-      HostBufferSemantics host_buffer_semantics,
-      absl::AnyInvocable<void() &&> on_done_with_host_buffer,
-      PjRtDevice* device, const Layout* device_layout) {
-    return tsl::errors::Unimplemented(
-        "BufferFromHostBuffer with an optional device layout is not "
-        "implemented on platform: ",
-        platform_name());
-  }
-
-  // TODO(b/277820585): remove BufferFromHostBuffer with PjRtDevice after the
-  // migration is done.
-  virtual absl::StatusOr<std::unique_ptr<PjRtBuffer>> BufferFromHostBuffer(
-      const void* data, PrimitiveType type, absl::Span<int64_t const> dims,
-      std::optional<absl::Span<int64_t const>> byte_strides,
-      HostBufferSemantics host_buffer_semantics,
-      absl::AnyInvocable<void() &&> on_done_with_host_buffer,
       PjRtMemorySpace* memory_space, const Layout* device_layout) {
     return tsl::errors::Unimplemented(
         "BufferFromHostBuffer with PjRtMemorySpace is not implemented on "
@@ -912,17 +851,9 @@ class PjRtClient {
         platform_name());
   }
 
-  // TODO(b/277820585): remove BufferFromHostLiteral with PjRtDevice after the
-  // migration is done.
-
   // Note that literal must remain in scope until the transfer has completed, so
   // the caller should, for example, wait for GetReadyFuture().Await()
   // completes on the return value before letting literal go out of scope.
-  virtual absl::StatusOr<std::unique_ptr<PjRtBuffer>> BufferFromHostLiteral(
-      const LiteralSlice& literal, PjRtDevice* device) {
-    return Unimplemented("BufferFromHostLiteral is not implemented.");
-  }
-
   virtual absl::StatusOr<std::unique_ptr<PjRtBuffer>> BufferFromHostLiteral(
       const LiteralSlice& literal, PjRtMemorySpace* memory_space) {
     return tsl::errors::Unimplemented(
@@ -1292,16 +1223,6 @@ class PjRtBuffer {
 
   // True if and only if Delete or Release has previously been called.
   virtual bool IsDeleted() = 0;
-
-  // Copies the buffer to device `dst_device`, performing a d2d transfer when
-  // `dst_device` is sharing the same Client, and performing a d2h and h2d copy
-  // if `dst_device` lives on a different Client.
-  // Returns an error if the buffer is already on dst_device.
-  //
-  // See note on semantics of cross-device copies in the class definition
-  // comment for PjRtClient.
-  virtual absl::StatusOr<std::unique_ptr<PjRtBuffer>> CopyToDevice(
-      PjRtDevice* dst_device) = 0;
 
   // Copies the buffer to memory space `dst_memory_space`.
   //

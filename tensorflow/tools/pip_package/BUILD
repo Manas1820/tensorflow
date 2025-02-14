@@ -109,7 +109,7 @@ filegroup(
         "@llvm-project//llvm:LICENSE.TXT",
         "@llvm-project//mlir:LICENSE.TXT",
         "@local_config_tensorrt//:LICENSE",
-        "@ml_dtypes//:LICENSE",
+        "@ml_dtypes_py//:LICENSE",
         "@org_brotli//:LICENSE",
         "@pasta//:LICENSE",
         "@png//:LICENSE",
@@ -126,11 +126,6 @@ filegroup(
         "//conditions:default": [
             "@com_github_googlecloudplatform_google_cloud_cpp//:LICENSE",
         ],
-    }) + select({
-        "@local_xla//xla/tsl:with_numa_support": [
-            "@hwloc//:COPYING",
-        ],
-        "//conditions:default": [],
     }) + if_cuda([
         "@cub_archive//:LICENSE.TXT",
         "@local_config_nccl//:LICENSE",
@@ -405,9 +400,9 @@ py_test(
 verify_manylinux_compliance_test(
     name = "manylinux_compliance_test",
     aarch64_compliance_tag = "manylinux_2_17_aarch64",
+    ppc64le_compliance_tag = "manylinux_2_17_ppc64le",
     test_tags = [
-        "mac_excluded",
-        "windows_excluded",
+        "manual",
     ],
     wheel = ":wheel",
     x86_64_compliance_tag = "manylinux_2_17_x86_64",

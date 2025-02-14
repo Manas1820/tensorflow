@@ -16,6 +16,7 @@ package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
     default_visibility = [
         # copybara:uncomment "//third_party/mediapipe/calculators/tensor:__subpackages__",
+        # copybara:uncomment "//third_party/odml/litert:__subpackages__",
         "//tensorflow/lite/experimental/litert:__subpackages__",
     ],
 )
@@ -57,7 +58,6 @@ cc_library(
         "common.h",
     ],
     deps = [
-        ":test_macros",
         "//tensorflow/lite:framework",
         "//tensorflow/lite/c:c_api_opaque",
         "//tensorflow/lite/c:common",
@@ -114,18 +114,31 @@ cc_library(
 )
 
 cc_library(
+    name = "simple_cascade_model_npu",
+    testonly = 1,
+    srcs = [],
+    hdrs = [
+        "testdata/simple_model_test_vectors.h",
+    ],
+    data = [
+        "testdata/simple_cascade_model_npu.tflite",
+        "testdata/simple_model_google_tensor.bin",
+        "testdata/simple_model_mtk.bin",
+        "testdata/simple_model_qualcomm.bin",
+    ],
+    deps = [
+        "//tensorflow/lite/experimental/litert/c:litert_model",
+        "//tensorflow/lite/experimental/litert/cc:litert_layout",
+    ],
+)
+
+cc_library(
     name = "test_models",
     hdrs = ["test_models.h"],
     deps = [
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/types:span",
     ],
-)
-
-cc_library(
-    name = "test_macros",
-    hdrs = ["test_macros.h"],
-    deps = ["//tensorflow/lite/experimental/litert/c:litert_common"],
 )
 
 cc_library(
@@ -150,3 +163,19 @@ cc_test(
         "@com_google_googletest//:gtest_main",
     ],
 )
+
+# Use this library if you want to enforce an OSS environment for your test.
+cc_library(
+    name = "matchers_oss",
+    testonly = True,
+    hdrs = ["matchers.h"],
+    tags = ["avoid_dep"],
+    deps = [
+        "//tensorflow/lite/experimental/litert/c:litert_common",
+        "//tensorflow/lite/experimental/litert/cc:litert_expected",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest",
+    ],
+)
+
+exports_files(srcs = ["testdata/simple_model_google_tensor.bin"])

@@ -45,7 +45,7 @@
 #include "tensorflow/lite/experimental/litert/core/model/model_serialize.h"
 #include "tensorflow/lite/experimental/litert/core/util/flatbuffer_tools.h"
 #include "tensorflow/lite/experimental/litert/test/common.h"
-#include "tensorflow/lite/experimental/litert/test/test_macros.h"
+#include "tensorflow/lite/experimental/litert/test/matchers.h"
 #include "tensorflow/lite/experimental/litert/test/test_models.h"
 #include "tensorflow/lite/schema/mutable/schema_generated.h"
 #include "tensorflow/lite/schema/schema_generated.h"
@@ -58,6 +58,7 @@ using ::testing::Each;
 using ::testing::ElementsAreArray;
 using ::testing::FloatEq;
 using ::testing::Values;
+using ::testing::litert::IsError;
 
 using ModelFactory = std::function<Expected<Model>()>;
 
@@ -120,8 +121,8 @@ class TestWithModelFactory : public ::testing::TestWithParam<ModelFactory> {
 
 TEST(ModelLoadTest, BadFilepath) {
   LiteRtModel model = nullptr;
-  LITERT_ASSERT_STATUS_HAS_CODE(LiteRtCreateModelFromFile("bad_path", &model),
-                                kLiteRtStatusErrorFileIO);
+  EXPECT_THAT(LiteRtCreateModelFromFile("bad_path", &model),
+              IsError(kLiteRtStatusErrorNotFound));
 }
 
 TEST(ModelLoadTest, BadFileData) {
@@ -140,10 +141,19 @@ TEST(ModelLoadTest, BadFileData) {
   bad_file.close();
 
   LiteRtModel model = nullptr;
-  LITERT_ASSERT_STATUS_HAS_CODE(
-      LiteRtCreateModelFromFile(test_file_path.c_str(), &model),
-      kLiteRtStatusErrorInvalidFlatbuffer);
+  EXPECT_THAT(LiteRtCreateModelFromFile(test_file_path.c_str(), &model),
+              IsError(kLiteRtStatusErrorInvalidFlatbuffer));
   // NOLINTEND
+}
+
+TEST(ModelLoadTest, GetCustomOpCode) {
+  auto model = litert::testing::LoadTestFileModel("simple_model_npu.tflite");
+  ASSERT_TRUE(model);
+  const auto& litert_model = *model.Get();
+  const auto& op = *litert_model.MainSubgraph()->Ops().front();
+  auto custom_op_code = GetCustomOpCode(litert_model, op);
+  ASSERT_TRUE(custom_op_code.has_value());
+  EXPECT_EQ(*custom_op_code, "DISPATCH_OP");
 }
 
 TEST(ModelLoadTest, WithMetadata) {
@@ -171,7 +181,7 @@ TEST(ModelSerializeTest, WithMetadata) {
   constexpr static absl::string_view kMetadataName = "an_soc_manufacturer";
   constexpr static absl::string_view kMetadataData = "My_Meta_Data";
 
-  LITERT_ASSERT_STATUS_OK(model.Get()->PushMetadata(
+  LITERT_ASSERT_OK(model.Get()->PushMetadata(
       kMetadataName, OwningBufferRef<uint8_t>(kMetadataData)));
 
   auto serialized = SerializeModel(std::move(*model.Get()));
@@ -249,6 +259,13 @@ TEST(ModelLoadTest, WithOffsetTensorBuffer) {
   const auto& weights_buffer =
       litert_model->get()->Subgraph(0).Tensor(0).Weights();
   EXPECT_EQ(weights_buffer.Buffer().StrView(), kTensorData);
+
+  // All tensors in the first subgraph should have the same buffer manager as
+  // the model.
+  for (auto* tensor : litert_model->get()->Subgraph(0).Tensors()) {
+    EXPECT_EQ(tensor->Weights().GetBufferManager(),
+              litert_model->get()->Buffers());
+  }
 }
 
 TEST(ModelSerializeTest, WithOffsetTensorBuffer) {
@@ -779,6 +796,9 @@ TEST_P(MultiSubgraphDupeConstTest, CheckGraph) {
     Tensor t(&cst);
     EXPECT_THAT(*t.WeightsData<float>(), ElementsAreArray(kWeights));
   }
+  auto buf_id_0 = model.Subgraph(0).Op(0).Input(1).Weights().GetBufferId();
+  auto buf_id_1 = model.Subgraph(1).Op(0).Input(1).Weights().GetBufferId();
+  ASSERT_EQ(buf_id_0, buf_id_1);
 }
 
 INSTANTIATE_TEST_SUITE_P(ModelLoadTests, MultiSubgraphDupeConstTest,
@@ -787,7 +807,7 @@ INSTANTIATE_TEST_SUITE_P(ModelLoadTests, MultiSubgraphDupeConstTest,
 INSTANTIATE_TEST_SUITE_P(ModelSerializeTests, MultiSubgraphDupeConstTest,
                          Values(MakeRoundTripFactory(kCstMultiSubgraph)));
 
-// Tests that programatically check litert against tflite models.
+// Tests that programmatically check litert against tflite models.
 //===---------------------------------------------------------------------------
 
 using ModelLoadOpCheckTest = TestWithModelPath;

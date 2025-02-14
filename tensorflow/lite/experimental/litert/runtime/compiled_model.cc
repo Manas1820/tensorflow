@@ -35,6 +35,7 @@
 #include "tensorflow/compiler/mlir/lite/allocation.h"
 #include "tensorflow/lite/c/common.h"
 #include "tensorflow/lite/core/interpreter_builder.h"
+#include "tensorflow/lite/delegates/utils/simple_opaque_delegate.h"
 #include "tensorflow/lite/experimental/litert/c/litert_common.h"
 #include "tensorflow/lite/experimental/litert/c/litert_compiled_model_options.h"
 #include "tensorflow/lite/experimental/litert/c/litert_dispatch_delegate.h"
@@ -65,12 +66,11 @@ using litert::Unexpected;
 using litert::internal::ExternalLiteRtBufferContext;
 
 Expected<void> LiteRtCompiledModelT::Initialize() {
-  // Use BuiltinOpResolverWithoutDefaultDelegates to avoid auto applying of
-  // Xnnpack delegate with GetSignatureRunner() API.
-  tflite::ops::builtin::BuiltinOpResolverWithoutDefaultDelegates resolver;
+  tflite::ops::builtin::BuiltinOpResolver resolver;
   tflite::InterpreterBuilder(*fb_model_, resolver)(&interp_);
   if (interp_ == nullptr) {
-    return Unexpected(kLiteRtStatusErrorRuntimeFailure);
+    return Unexpected(kLiteRtStatusErrorRuntimeFailure,
+                      "Failed to build TFL interpreter");
   }
 
   signature_keys_ = interp_->signature_keys();
@@ -128,19 +128,22 @@ Expected<LiteRtCompiledModelT::Ptr> LiteRtCompiledModelT::Create(
   if (new_flatbuffer) {
     model_buffer = reinterpret_cast<const char*>(new_flatbuffer->Data());
     model_buffer_size = new_flatbuffer->Size();
+
   } else if (auto init_model_buffer = detail::GetTflFlatbuffer(*model).Buf();
              init_model_buffer.Size() != 0) {
     // Use the saved the original FB pointer when the LiteRtModel was created
     // from a buffer.
     model_buffer = init_model_buffer.StrData();
     model_buffer_size = init_model_buffer.Size();
+
   } else {
     // TODO b/383120429 - Once LiteRtModel provide tflite::Model object, switch
     // to use it to initialize Interpreter instead of serializing LiteRtModel.
     auto [data, size, offset] = compiled_model->model_buf_.GetWeak();
     if (LiteRtSerializeModel(model, &data, &size, &offset,
                              /*destroy_model=*/false) != kLiteRtStatusOk) {
-      return Unexpected(kLiteRtStatusErrorRuntimeFailure);
+      return Unexpected(kLiteRtStatusErrorRuntimeFailure,
+                        "Failed to serialize model");
     }
     compiled_model->alloc_ = std::make_unique<tflite::MemoryAllocation>(
         compiled_model->model_buf_.Data(), compiled_model->model_buf_.Size(),
@@ -149,22 +152,72 @@ Expected<LiteRtCompiledModelT::Ptr> LiteRtCompiledModelT::Create(
         reinterpret_cast<const char*>(compiled_model->alloc_->base());
     model_buffer_size = compiled_model->alloc_->bytes();
   }
+
   compiled_model->fb_model_ =
       tflite::FlatBufferModel::BuildFromBuffer(model_buffer, model_buffer_size);
   if (compiled_model->fb_model_ == nullptr) {
-    return Unexpected(kLiteRtStatusErrorFileIO);
+    return Unexpected(kLiteRtStatusErrorFileIO,
+                      "Failed to build flatbuffer from buffer");
   }
 
   if (auto res = compiled_model->Initialize(); !res.HasValue()) {
-    return Unexpected(kLiteRtStatusErrorRuntimeFailure);
+    return Unexpected(kLiteRtStatusErrorRuntimeFailure,
+                      "Failed to inizialize compiled model");
+  }
+
+  if (hardware_accelerators & kLiteRtHwAcceleratorGpu) {
+    // Query GPU accelerator and apply the delegate.
+    // TODO b/394958439 - Support NPU delegate here.
+    auto& registry = env->GetAcceleratorRegistry();
+    for (int i = 0; i < registry.size(); ++i) {
+      auto accelerator = registry.Get(i);
+      LiteRtHwAcceleratorSet accelerator_supported_hardware;
+      if ((*accelerator)
+              ->GetHardwareSupport(*accelerator,
+                                   &accelerator_supported_hardware) !=
+          kLiteRtStatusOk) {
+        continue;
+      }
+      if (accelerator_supported_hardware & kLiteRtHwAcceleratorGpu) {
+        TfLiteOpaqueDelegate* delegate_ptr = nullptr;
+        if ((*accelerator)
+                ->CreateDelegate(*accelerator,
+                                 reinterpret_cast<void**>(&delegate_ptr)) !=
+            kLiteRtStatusOk) {
+          continue;
+        }
+        auto delegate = tflite::TfLiteOpaqueDelegateUniquePtr(
+            delegate_ptr, reinterpret_cast<void (*)(TfLiteOpaqueDelegate*)>(
+                              (*accelerator)->DestroyDelegate));
+        if (compiled_model->interp_->ModifyGraphWithDelegate(delegate_ptr) !=
+            kTfLiteOk) {
+          return Unexpected(kLiteRtStatusErrorRuntimeFailure,
+                            "Failed to modify graph with delegate");
+        }
+        compiled_model->RegisterDelegate(std::move(delegate));
+        break;
+      }
+    }
   }
 
   // Apply the dispatch delegate, unconditionally, since the loaded model may
   // have been compiled for NPU at AOT.
+  // TODO: b/394958439 - Get the DispatchDelegate from the AcceleratorRegistry.
   auto dispatch_delegate_options =
       litert::CreateDispatchDelegateOptionsPtr(*env);
   LiteRtDispatchDelegateAddAllocBaseOption(dispatch_delegate_options.get(),
                                            model_buffer);
+
+  auto* allocation = compiled_model->fb_model_->allocation();
+  if (allocation != nullptr &&
+      allocation->type() == tflite::Allocation::Type::kMMap) {
+    auto& mmap_allocation =
+        static_cast<const tflite::MMAPAllocation&>(*allocation);
+    int flatbuffer_fd = mmap_allocation.fd();
+    LiteRtDispatchDelegateAddAllocFdOption(dispatch_delegate_options.get(),
+                                           flatbuffer_fd);
+  }
+
   auto dispatch_delegate = litert::CreateDispatchDelegatePtr(
       *env, std::move(dispatch_delegate_options));
   if (auto status = compiled_model->interp_->ModifyGraphWithDelegate(
@@ -258,7 +311,7 @@ tflite::SignatureRunner* LiteRtCompiledModelT::GetSignatureRunner(
 }
 
 Expected<void> LiteRtCompiledModelT::RegisterBuffer(
-    tflite::SignatureRunner* runner, const TfLiteTensor* tensor,
+    tflite::SignatureRunner* runner, TfLiteTensor* tensor,
     const char* tensor_name, LiteRtTensorBuffer buffer, bool is_input,
     std::vector<LiteRtTensorBuffer>& locked_buffers) {
   bool backend_requires_cpu_buffer = false;
@@ -281,6 +334,9 @@ Expected<void> LiteRtCompiledModelT::RegisterBuffer(
           return Unexpected(kLiteRtStatusErrorRuntimeFailure,
                             "Failed to register tensor buffer");
         }
+        // Mark the tensor as non-CPU to avoid TFLite from allocating it.
+        tensor->allocation_type = kTfLiteNonCpu;
+        tensor->data.data = nullptr;
         return {};
       }
       if (type == kLiteRtTensorBufferTypeHostMemory) {
@@ -340,7 +396,7 @@ Expected<void> LiteRtCompiledModelT::RegisterBuffer(
 Expected<void> LiteRtCompiledModelT::Run(
     absl::string_view signature_key,
     const std::vector<LiteRtTensorBuffer>& input_buffers,
-    const std::vector<LiteRtTensorBuffer>& output_buffers) {
+    const std::vector<LiteRtTensorBuffer>& output_buffers, bool& async) {
   auto runner = GetSignatureRunner(signature_key);
   if (runner == nullptr) {
     return Unexpected(kLiteRtStatusErrorNotFound,
@@ -363,23 +419,6 @@ Expected<void> LiteRtCompiledModelT::Run(
     if (litert_output_buffer->HasEvent()) {
       return Error(kLiteRtStatusErrorInvalidArgument,
                    "Output buffers cannot have events attached");
-    }
-  }
-
-  // TODO: If input buffers have events, we wait on them before we launch the
-  // inference. This is inefficient when using HW acceleration, since in that
-  // case it would be best to make the HW accelerator wait for those events as
-  // opposed to blocking the CPU here.
-  for (auto input_buffer : input_buffers) {
-    if (input_buffer->HasEvent()) {
-      auto litert_event = input_buffer->GetEvent();
-      if (!litert_event) {
-        return litert_event.Error();
-      }
-      litert::Event event(*litert_event, /*owned=*/false);
-      if (auto status = event.Wait(/*timeout_in_ms=*/-1); !status) {
-        return status.Error();
-      }
     }
   }
 
@@ -408,9 +447,9 @@ Expected<void> LiteRtCompiledModelT::Run(
   for (int i = 0; i < runner->output_names().size(); ++i) {
     const auto& output_name = runner->output_names()[i];
     auto* output_tensor = runner->output_tensor(output_name);
-    auto res =
-        RegisterBuffer(runner, output_tensor, output_name, output_buffers[i],
-                       /*is_input=*/false, locked_buffers);
+    auto res = RegisterBuffer(runner, const_cast<TfLiteTensor*>(output_tensor),
+                              output_name, output_buffers[i],
+                              /*is_input=*/false, locked_buffers);
     if (!res) {
       return Unexpected(
           kLiteRtStatusErrorRuntimeFailure,
@@ -428,13 +467,35 @@ Expected<void> LiteRtCompiledModelT::Run(
     return Unexpected(kLiteRtStatusErrorRuntimeFailure, "Failed to invoke");
   }
 
+  if (async) {
+    // If the caller requested async execution, then set async to true if any of
+    // the output buffers have been assigned a synchronization event.
+    async = false;
+    for (auto& tb : output_buffers) {
+      async |= tb->HasEvent();
+    }
+  } else {
+    // If the caller has not requested async execution, then wait on
+    // synchronization events that have been attached to the outputs.
+    for (auto& tb : output_buffers) {
+      if (tb->HasEvent()) {
+        auto event = tb->GetEvent();
+        if (auto status = litert::Event(*event, /*owned=*/false)
+                              .Wait(/*timeout_in_ms=*/-1);
+            !status) {
+          return status;
+        }
+      }
+    }
+  }
+
   return {};
 }
 
 litert::Expected<void> LiteRtCompiledModelT::RunCApi(
     size_t signature_index, size_t num_input_buffers,
     LiteRtTensorBuffer* input_buffers, size_t num_output_buffers,
-    LiteRtTensorBuffer* output_buffers) {
+    LiteRtTensorBuffer* output_buffers, bool* async) {
   if (signature_index >= signature_keys_.size()) {
     return litert::Unexpected(
         kLiteRtStatusErrorIndexOOB,
@@ -450,6 +511,11 @@ litert::Expected<void> LiteRtCompiledModelT::RunCApi(
   for (int i = 0; i < num_output_buffers; ++i) {
     output_buffers_vec.push_back(std::move(output_buffers[i]));
   }
-  return Run(*signature_keys_[signature_index], input_buffers_vec,
-             output_buffers_vec);
+  bool async_ = async ? *async : false;
+  auto result = Run(*signature_keys_[signature_index], input_buffers_vec,
+                    output_buffers_vec, async_);
+  if (async) {
+    *async = async_;
+  }
+  return result;
 }

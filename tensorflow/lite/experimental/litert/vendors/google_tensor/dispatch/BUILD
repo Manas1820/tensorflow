@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("//tensorflow/lite/experimental/litert/build_common:litert_build_defs.bzl", "litert_dynamic_lib")
+load("//tensorflow/lite/experimental/litert/build_common:litert_build_defs.bzl", "copy_file", "litert_dynamic_lib")
 
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
@@ -64,6 +64,20 @@ litert_dynamic_lib(
     ],
 )
 
+# This is cc_library target for `libLiteRtDispatch.so`.
+cc_library(
+    name = "dispatch_api_shared_lib",
+    srcs = [":dispatch_api_so"],
+    linkstatic = 1,
+)
+
+# Copies the shared library so that it is available for use in test data as libLiteRtDispatch.so.
+copy_file(
+    name = "copy_dispatch_api_so",
+    src = "//tensorflow/lite/experimental/litert/vendors/google_tensor/dispatch:dispatch_api_so",
+    target = "libLiteRtDispatch.so",
+)
+
 cc_test(
     name = "dispatch_api_google_tensor_test",
     srcs = [
@@ -113,6 +127,7 @@ cc_test(
         "no_oss",
     ],
     deps = [
+        "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/types:span",
@@ -124,6 +139,5 @@ cc_test(
         "//tensorflow/lite/experimental/litert/test:common",
         "//tensorflow/lite/experimental/litert/test:simple_model_npu",
         "//tensorflow/lite/experimental/litert/vendors/c:litert_dispatch_c_api",
-        "@com_google_googletest//:gtest_main",
     ],
 )

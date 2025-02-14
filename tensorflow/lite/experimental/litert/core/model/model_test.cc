@@ -29,7 +29,7 @@
 #include "tensorflow/lite/experimental/litert/cc/litert_buffer_ref.h"
 #include "tensorflow/lite/experimental/litert/core/model/buffer_manager.h"
 #include "tensorflow/lite/experimental/litert/core/util/flatbuffer_tools.h"
-#include "tensorflow/lite/experimental/litert/test/test_macros.h"
+#include "tensorflow/lite/experimental/litert/test/matchers.h"
 #include "tensorflow/lite/schema/schema_generated.h"
 
 namespace litert::internal {
@@ -46,7 +46,7 @@ TEST(ModelTest, GetMetadata) {
   static constexpr absl::string_view kKey = "KEY";
 
   LiteRtModelT model;
-  LITERT_ASSERT_STATUS_OK(model.PushMetadata(kKey, kMetadata));
+  LITERT_ASSERT_OK(model.PushMetadata(kKey, kMetadata));
   auto found_metadata = model.FindMetadata(kKey);
   ASSERT_TRUE(found_metadata);
   EXPECT_EQ(found_metadata->StrView(), kMetadata);
@@ -60,8 +60,10 @@ TEST(ModelTest, MetadataDNE) {
 
 TEST(ModelTest, EmplaceSubgraph) {
   LiteRtModelT model;
-  model.EmplaceSubgraph();
+  auto& sg = model.EmplaceSubgraph();
   EXPECT_EQ(model.Subgraphs().size(), 1);
+  auto& tensor = sg.EmplaceTensor();
+  EXPECT_EQ(tensor.Weights().GetBufferManager(), model.Buffers());
 }
 
 TEST(ModelTest, Signature) {
@@ -236,7 +238,7 @@ TEST(ModelQuantizationTypeTest, MakePerChannel) {
   LiteRtTensorT tensor;
   const auto quant = MakePerChannelQuantization(
       kScale, kZero, kQdim,
-      [&tensor](auto s) { return tensor.RequestBuffer(s); });
+      [&tensor](auto s) { return tensor.RequestScratchBuffer(s); });
 
   ASSERT_EQ(quant.first, kLiteRtQuantizationPerChannel);
   const auto& per_channel = quant.second.per_channel;

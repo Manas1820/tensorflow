@@ -23,15 +23,22 @@
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
+#include "third_party/qairt/latest/include/QNN/HTP/QnnHtpContext.h"
+#include "third_party/qairt/latest/include/QNN/HTP/QnnHtpDevice.h"
+#include "third_party/qairt/latest/include/QNN/QnnBackend.h"
 #include "third_party/qairt/latest/include/QNN/QnnCommon.h"
+#include "third_party/qairt/latest/include/QNN/QnnContext.h"
+#include "third_party/qairt/latest/include/QNN/QnnDevice.h"
 #include "third_party/qairt/latest/include/QNN/QnnInterface.h"
 #include "third_party/qairt/latest/include/QNN/QnnLog.h"
 #include "third_party/qairt/latest/include/QNN/QnnTypes.h"
 #include "third_party/qairt/latest/include/QNN/System/QnnSystemCommon.h"
 #include "third_party/qairt/latest/include/QNN/System/QnnSystemContext.h"
+#include "third_party/qairt/latest/include/QNN/System/QnnSystemInterface.h"
 #include "tensorflow/lite/experimental/litert/c/litert_common.h"
 #include "tensorflow/lite/experimental/litert/c/litert_logging.h"
 #include "tensorflow/lite/experimental/litert/cc/litert_expected.h"
+#include "tensorflow/lite/experimental/litert/cc/litert_macros.h"
 #include "tensorflow/lite/experimental/litert/core/dynamic_loading.h"
 #include "tensorflow/lite/experimental/litert/vendors/qualcomm/common.h"
 #include "tensorflow/lite/experimental/litert/vendors/qualcomm/qnn_log.h"
@@ -242,6 +249,18 @@ LiteRtStatus QnnManager::GenerateContextBinary(
   return kLiteRtStatusOk;
 }
 
+LiteRtStatus QnnManager::ValidateOp(const Qnn_OpConfig_t& op_config) {
+  if (Qnn_ErrorHandle_t error =
+          Api()->backendValidateOpConfig(BackendHandle(), op_config);
+      QNN_SUCCESS != error) {
+    LITERT_LOG(LITERT_ERROR, "Failed to validate op %s\n, error: %lld",
+               op_config.v1.name, static_cast<long long>(error));
+    return kLiteRtStatusErrorInvalidLegalization;
+  }
+
+  return kLiteRtStatusOk;
+}
+
 LiteRtStatus QnnManager::Init(absl::Span<const QnnBackend_Config_t*> configs,
                               std::optional<std::string> shared_library_dir,
                               std::optional<QnnHtpDevice_Arch_t> soc_model) {
@@ -380,6 +399,19 @@ absl::Span<const QnnBackend_Config_t*> QnnManager::DefaultBackendConfigs() {
 
 absl::Span<const QnnContext_Config_t*> QnnManager::DefaultContextConfigs() {
   static const QnnContext_Config_t* configs[] = {nullptr};
+  return absl::MakeSpan(configs);
+}
+
+absl::Span<const QnnContext_Config_t*>
+QnnManager::WeightSharingContextConfigs() {
+  static QnnHtpContext_CustomConfig_t customConfig =
+      QNN_HTP_CONTEXT_CUSTOM_CONFIG_INIT;
+  customConfig.option = QNN_HTP_CONTEXT_CONFIG_OPTION_WEIGHT_SHARING_ENABLED;
+  customConfig.weightSharingEnabled = true;
+  static QnnContext_Config_t contextConfig = QNN_CONTEXT_CONFIG_INIT;
+  contextConfig.option = QNN_CONTEXT_CONFIG_OPTION_CUSTOM;
+  contextConfig.customConfig = &customConfig;
+  static const QnnContext_Config_t* configs[2] = {&contextConfig, nullptr};
   return absl::MakeSpan(configs);
 }
 

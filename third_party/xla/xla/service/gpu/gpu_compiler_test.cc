@@ -1037,6 +1037,8 @@ ENTRY e {
     TF_ASSERT_OK_AND_ASSIGN(
         std::unique_ptr<Executable> executable,
         aot_result->LoadExecutable(compiler, aot_options.executor()));
+    std::unique_ptr<OpaqueExecutable> wrapped_executable =
+        test_runner_as_hlo_runner().WrapExecutable(std::move(executable));
 
     const xla::Literal literal_input =
         xla::LiteralUtil::CreateR0<int32_t>(input);
@@ -1044,8 +1046,8 @@ ENTRY e {
         xla::LiteralUtil::CreateR0<int32_t>(expected_result);
 
     TF_ASSERT_OK_AND_ASSIGN(Literal result,
-                            GetHloRunner().value()->ExecuteWithExecutable(
-                                executable.get(), {&literal_input}));
+                            test_runner_as_hlo_runner().ExecuteWithExecutable(
+                                wrapped_executable.get(), {&literal_input}));
 
     EXPECT_TRUE(LiteralTestUtil::Equal(result, literal_expected_result));
   };
@@ -1122,6 +1124,7 @@ TEST_F(GpuCompilerTest, TestFlag_xla_gpu_unsafe_pipelined_loop_annotator) {
   DebugOptions debug_options;
   HloModuleConfig config;
   debug_options.set_xla_gpu_unsafe_pipelined_loop_annotator(true);
+  debug_options.set_xla_gpu_enable_pipelined_p2p(true);
   config.set_debug_options(debug_options);
   config.set_num_partitions(4);
   config.set_use_spmd_partitioning(true);
@@ -1766,6 +1769,91 @@ p0 = f32[8,4,64]{2,1,0} parameter(0)
 p1 = f32[4,64,1024] parameter(1)
 ROOT dot = f32[4,8,1024]{2,1,0} dot(p0, p1), lhs_batch_dims={1}, lhs_contracting_dims={2}, rhs_batch_dims={0}, rhs_contracting_dims={1}
 })");
+}
+
+TEST_F(FixPointTest, DotWithReshapes) {
+  // Reduced test case for b/383729716.
+  ExpectPipelinesReachFixedPoint(
+      R"(ENTRY main {
+tmp_0 = f64[3]{0} parameter(0)
+tmp_1 = f64[3,1]{1,0} reshape(tmp_0)
+tmp_2 = f64[3]{0} reshape(tmp_1)
+tmp_3 = f64[3]{0} transpose(tmp_2), dimensions={0}
+tmp_4 = f64[3,1]{1,0} reshape(tmp_3)
+tmp_5 = f64[2]{0} parameter(1)
+tmp_6 = f64[1,2]{1,0} reshape(tmp_5)
+tmp_7 = f64[2]{0} reshape(tmp_6)
+tmp_8 = f64[2]{0} transpose(tmp_7), dimensions={0}
+tmp_9 = f64[1,2]{1,0} reshape(tmp_8)
+tmp_10 = f64[3,2]{1,0} dot(tmp_4, tmp_9), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+ROOT tmp_11 = f64[3,2]{1,0} reshape(tmp_10)
+})");
+}
+
+TEST_F(GpuCompilerTest,
+       DynamicSliceFusionWithCollectiveShouldWrapInAsyncAndTestE2E) {
+  const char* hlo = R"(
+    HloModule test, replica_count=2
+    add {
+      x = s32[] parameter(0)
+      y = s32[] parameter(1)
+      ROOT add = s32[] add(x, y)
+    }
+    ENTRY main {
+      destination = s32[2,2,32] parameter(0)
+      c1 = s32[] constant(1)
+      c0 = s32[] constant(0)
+      c4 = s32[] constant(4)
+      source = s32[8,32] parameter(1)
+      a = s32[1024,1024] parameter(2)
+      b = s32[1024,1024] parameter(3)
+      slice = s32[4,32] slice(source), slice={[4:8], [0:32]}
+      rs = s32[2,32] reduce-scatter(slice), replica_groups={{0,1}}, dimensions={0}, to_apply=add
+      reshape = s32[1,2,32] reshape(rs)
+      dus = s32[2,2,32] dynamic-update-slice(destination, reshape, c1, c0, c0)
+      dot = s32[1024,1024] dot(a,b), lhs_contracting_dims={1}, rhs_contracting_dims={0}
+      ROOT tuple = tuple(dus,dot)
+    }
+  )";
+  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> m,
+                          ParseAndReturnVerifiedModule(hlo));
+  std::unique_ptr<HloModule> m_ref = m->Clone();
+  m->mutable_config()
+      .mutable_debug_options()
+      .set_xla_gpu_enable_dynamic_slice_fusion(true);
+  TF_ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<OpaqueExecutable> wrapped_exec,
+      CreateExecutable(m->Clone(), /*run_hlo_passes=*/true));
+  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<Executable> exec,
+                          test_runner_as_hlo_runner().ExecutableFromWrapped(
+                              std::move(wrapped_exec)));
+  const char* kExpected = R"(
+    // CHECK:      dynamic-slice-fusion{{.+}} {
+    // CHECK:        %[[slice:.+]] = {{.+}} slice({{.+}}), slice={[4:8], [0:32]}
+    // CHECK:        %[[rs:.+]] = {{.+}} reduce-scatter(%[[slice]]), 
+    // CHECK-SAME{LITERAL}:              replica_groups={{0,1}}, dimensions={0}
+    // CHECK:        %[[bitcast:.+]] = {{.+}} bitcast(%[[rs]])
+    // CHECK:        ROOT {{.+}} = {{.+}} dynamic-update-slice({{.+}}, %[[bitcast]], {{.+}})
+    // CHECK:      ENTRY
+    // CHECK:        %[[fusion_start:.+]] = {{.+}} fusion-start({{.+}}), kind=kCustom, {{.+}}"name":"dynamic_address_computation"
+    // CHECK-NEXT:   %[[wrapped_dot:.+]] = {{.+}} fusion({{.+}}), kind=kLoop
+    // CHECK-NEXT:   %[[fusion_done:.+]] = {{.+}} fusion-done(%[[fusion_start]]), {{.+}}"name":"dynamic_address_computation"
+    // CHECK:        ROOT {{.+}} = {{.+}} tuple(%[[fusion_done]], %[[wrapped_dot]])
+  )";
+  EXPECT_THAT(
+      RunFileCheck(exec->module().ToString(HloPrintOptions{}
+                                               .set_print_operand_shape(false)
+                                               .set_print_metadata(false)),
+                   kExpected),
+      ::tsl::testing::IsOkAndHolds(true));
+
+  if (test_runner().device_count() < 2) {
+    GTEST_SKIP() << "Skipping test as it requires at least 2 devices.";
+  }
+  EXPECT_TRUE(RunAndCompareTwoModulesReplicated(std::move(m), std::move(m_ref),
+                                                /*run_hlo_passes=*/true,
+                                                /*use_threads=*/true,
+                                                std::nullopt));
 }
 
 }  // namespace

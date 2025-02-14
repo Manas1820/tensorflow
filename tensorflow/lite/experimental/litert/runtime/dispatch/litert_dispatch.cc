@@ -241,16 +241,17 @@ LiteRtStatus LiteRtDispatchUnregisterTensorBuffer(
 
 LiteRtStatus LiteRtDispatchInvocationContextCreate(
     LiteRtDispatchDeviceContext device_context,
-    LiteRtDispatchExecutableType exec_type, const void* exec_bytecode_ptr,
-    size_t exec_bytecode_size, const char* function_name, int num_inputs,
-    int num_outputs, LiteRtDispatchInvocationContext* invocation_context) {
-  if (!device_context || !exec_bytecode_ptr || !invocation_context) {
+    LiteRtDispatchExecutableType exec_type,
+    const LiteRtMemBuffer* exec_bytecode_buffer, const char* function_name,
+    int num_inputs, int num_outputs,
+    LiteRtDispatchInvocationContext* invocation_context) {
+  if (!device_context || !exec_bytecode_buffer || !invocation_context) {
     LITERT_LOG(LITERT_ERROR, "Null input");
     return kLiteRtStatusErrorInvalidArgument;
   }
   INVOKE_FUNC(invocation_context_create, device_context, exec_type,
-              exec_bytecode_ptr, exec_bytecode_size, function_name, num_inputs,
-              num_outputs, invocation_context);
+              exec_bytecode_buffer, function_name, num_inputs, num_outputs,
+              invocation_context);
 }
 
 LiteRtStatus LiteRtDispatchInvocationContextDestroy(
@@ -321,6 +322,54 @@ LiteRtStatus LiteRtDispatchInvoke(
     return kLiteRtStatusErrorInvalidArgument;
   }
   INVOKE_FUNC(invoke, invocation_context);
+}
+
+LiteRtStatus LiteRtDispatchStartMetricsCollection(
+    LiteRtDispatchInvocationContext invocation_context, int detail_level) {
+  if (!invocation_context) {
+    LITERT_LOG(LITERT_ERROR, "Null input");
+    return kLiteRtStatusErrorInvalidArgument;
+  } else if (detail_level < 0) {
+    LITERT_LOG(LITERT_ERROR, "Invalid detail level");
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+  INVOKE_FUNC(start_metrics_collection, invocation_context, detail_level);
+}
+
+LiteRtStatus LiteRtDispatchStopMetricsCollection(
+    LiteRtDispatchInvocationContext invocation_context,
+    LiteRtDispatchMetrics* metrics) {
+  if (!invocation_context || !metrics) {
+    LITERT_LOG(LITERT_ERROR, "Null input");
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+  INVOKE_FUNC(stop_metrics_collection, invocation_context, metrics);
+}
+
+LiteRtStatus LiteRtDispatchGetNumMetrics(LiteRtDispatchMetrics metrics,
+                                         int* num_metrics) {
+  if (!metrics || !num_metrics) {
+    LITERT_LOG(LITERT_ERROR, "Null input");
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+  INVOKE_FUNC(get_num_metrics, metrics, num_metrics);
+}
+
+LiteRtStatus LiteRtDispatchGetMetric(LiteRtDispatchMetrics metrics,
+                                     int metric_index, LiteRtMetric* metric) {
+  if (!metrics || !metric) {
+    LITERT_LOG(LITERT_ERROR, "Null input");
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+  INVOKE_FUNC(get_metric, metrics, metric_index, metric);
+}
+
+LiteRtStatus LiteRtDispatchDestroyMetrics(LiteRtDispatchMetrics metrics) {
+  if (!metrics) {
+    LITERT_LOG(LITERT_ERROR, "Null input");
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+  INVOKE_FUNC(destroy_metrics, metrics);
 }
 
 // /////////////////////////////////////////////////////////////////////////////
@@ -433,9 +482,9 @@ LiteRtStatus LiteRtDispatchConnectGraphOutput(LiteRtDispatchGraph graph,
 
 LiteRtStatus LiteRtDispatchLoadExecutable(
     LiteRtDispatchDeviceContext device_context,
-    LiteRtDispatchExecutableType type, const void* bytecode,
-    size_t bytecode_size, LiteRtDispatchExecutableHandle* exec_handle) {
-  if (!device_context || !bytecode || !exec_handle) {
+    LiteRtDispatchExecutableType type, const LiteRtMemBuffer* bytecode_buffer,
+    LiteRtDispatchExecutableHandle* exec_handle) {
+  if (!device_context || !bytecode_buffer || !exec_handle) {
     LITERT_LOG(LITERT_ERROR, "Null input");
     return kLiteRtStatusErrorInvalidArgument;
   }
@@ -447,8 +496,8 @@ LiteRtStatus LiteRtDispatchLoadExecutable(
     LITERT_LOG(LITERT_ERROR, "load_executable not found");
     return kLiteRtStatusErrorRuntimeFailure;
   }
-  INVOKE_GRAPH_FUNC(load_executable, device_context, type, bytecode,
-                    bytecode_size, exec_handle);
+  INVOKE_GRAPH_FUNC(load_executable, device_context, type, bytecode_buffer,
+                    exec_handle);
 }
 
 LiteRtStatus LiteRtDispatchUnloadExecutable(
