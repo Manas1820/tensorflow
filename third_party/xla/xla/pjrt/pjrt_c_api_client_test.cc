@@ -80,7 +80,7 @@ TEST(PjRtCApiClientTest, IsDynamicDimension) {
           data0.data(), shape0.element_type(), shape0.dimensions(),
           /*byte_strides=*/std::nullopt,
           PjRtClient::HostBufferSemantics::kImmutableOnlyDuringCall, nullptr,
-          client->addressable_devices()[0]));
+          client->memory_spaces()[0], /*device_layout=*/nullptr));
   std::vector<int32_t> data1{2};
   Shape shape1 = ShapeUtil::MakeShape(S32, {});
   TF_ASSERT_OK_AND_ASSIGN(
@@ -89,7 +89,7 @@ TEST(PjRtCApiClientTest, IsDynamicDimension) {
           data1.data(), shape1.element_type(), shape1.dimensions(),
           /*byte_strides=*/std::nullopt,
           PjRtClient::HostBufferSemantics::kImmutableOnlyDuringCall, nullptr,
-          client->addressable_devices()[0]));
+          client->memory_spaces()[0], /*device_layout=*/nullptr));
   XlaBuilder builder("DynamicReshape");
   auto inp_0 = Parameter(&builder, 0, shape0, "input0");
   auto inp_1 = Parameter(&builder, 1, shape1, "input1");
@@ -130,7 +130,7 @@ TEST(PjRtCApiClientTest, OnDeviceShape) {
             data.data(), shape.element_type(), shape.dimensions(),
             /*byte_strides=*/std::nullopt,
             PjRtClient::HostBufferSemantics::kImmutableOnlyDuringCall, nullptr,
-            client->addressable_devices()[0]));
+            client->memory_spaces()[0], /*device_layout=*/nullptr));
     EXPECT_EQ(buffer->on_device_shape(), shape);
     EXPECT_EQ(*buffer->logical_on_device_shape(), shape);
   }
@@ -181,7 +181,7 @@ TEST(PjRtCApiClientTest, CreateBuffersForAsyncHostToDeviceWithShape) {
       /*minor_to_major=*/{1, 0, 2});
   std::vector<xla::Shape> host_shapes = {host_shape};
   auto status_or_transfer_manager = client->CreateBuffersForAsyncHostToDevice(
-      absl::MakeSpan(host_shapes), client->addressable_devices()[0]);
+      absl::MakeSpan(host_shapes), client->memory_spaces()[0]);
   EXPECT_TRUE(status_or_transfer_manager.ok())
       << status_or_transfer_manager.status();
 }
@@ -206,7 +206,7 @@ TEST(PjRtClientTest, CreateViewAndCopyToDeviceAsyncExternalCpuOnly) {
 
   TF_ASSERT_OK_AND_ASSIGN(
       std::unique_ptr<PjRtBuffer> result,
-      buffer->CopyToDevice(client->addressable_devices()[1]));
+      buffer->CopyToMemorySpace(client->memory_spaces()[1]));
   buffer.reset();
   ASSERT_TRUE(result);
   TF_ASSERT_OK_AND_ASSIGN(auto literal, result->ToLiteralSync());

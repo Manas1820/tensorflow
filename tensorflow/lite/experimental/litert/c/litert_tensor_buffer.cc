@@ -24,6 +24,10 @@
 #include "tensorflow/lite/experimental/litert/c/litert_logging.h"
 #include "tensorflow/lite/experimental/litert/c/litert_model.h"
 #include "tensorflow/lite/experimental/litert/runtime/tensor_buffer.h"
+#if LITERT_HAS_OPENGL_SUPPORT
+#include <GLES3/gl31.h>
+#include <GLES3/gl32.h>
+#endif  // LITERT_HAS_OPENGL_SUPPORT
 
 LiteRtStatus LiteRtCreateTensorBufferFromHostMemory(
     const LiteRtRankedTensorType* tensor_type, void* host_buffer_addr,
@@ -160,7 +164,8 @@ LiteRtStatus LiteRtGetTensorBufferDmaBufBuffer(LiteRtTensorBuffer tensor_buffer,
 }
 #endif  // LITERT_HAS_DMABUF_SUPPORT
 
-LiteRtStatus LiteRtCreateTensorBufferFromOpenCLBuffer(
+#if LITERT_HAS_OPENCL_SUPPORT
+LiteRtStatus LiteRtCreateTensorBufferFromOpenClBuffer(
     const LiteRtRankedTensorType* tensor_type, cl_mem cl_mem_addr,
     size_t opencl_buffer_size, LiteRtOpenClDeallocator deallocator,
     LiteRtTensorBuffer* buffer) {
@@ -178,8 +183,8 @@ LiteRtStatus LiteRtCreateTensorBufferFromOpenCLBuffer(
   return kLiteRtStatusOk;
 }
 
-LiteRtStatus LiteRtGetTensorBufferOpenCLBuffer(LiteRtTensorBuffer tensor_buffer,
-                                               void** cl_mem_addr) {
+LiteRtStatus LiteRtGetTensorBufferOpenClBuffer(LiteRtTensorBuffer tensor_buffer,
+                                               cl_mem* cl_mem_addr) {
   if (!tensor_buffer || !cl_mem_addr) {
     return kLiteRtStatusErrorInvalidArgument;
   }
@@ -193,6 +198,7 @@ LiteRtStatus LiteRtGetTensorBufferOpenCLBuffer(LiteRtTensorBuffer tensor_buffer,
   *cl_mem_addr = (*opencl_buffer)->GetMemoryPtr();
   return kLiteRtStatusOk;
 }
+#endif  // LITERT_HAS_OPENCL_SUPPORT
 
 #if LITERT_HAS_FASTRPC_SUPPORT
 LiteRtStatus LiteRtCreateTensorBufferFromFastRpcBuffer(
@@ -233,6 +239,47 @@ LiteRtStatus LiteRtGetTensorBufferFastRpcBuffer(
   return kLiteRtStatusOk;
 }
 #endif  // LITERT_HAS_FASTRPC_SUPPORT
+
+#if LITERT_HAS_OPENGL_SUPPORT
+LiteRtStatus LiteRtCreateTensorBufferFromGlBuffer(
+    const LiteRtRankedTensorType* tensor_type, GLenum target, GLuint id,
+    size_t bytes_size, size_t offset, LiteRtGlBufferDeallocator deallocator,
+    LiteRtTensorBuffer* tensor_buffer) {
+  if (!tensor_type || !tensor_buffer) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+  auto created_tensor_buffer = LiteRtTensorBufferT::CreateFromGlBuffer(
+      *tensor_type, target, id, bytes_size, offset, deallocator);
+  if (!created_tensor_buffer) {
+    LITERT_LOG(LITERT_ERROR, "%s",
+               created_tensor_buffer.Error().Message().data());
+    return created_tensor_buffer.Error().Status();
+  }
+  *tensor_buffer = created_tensor_buffer->release();
+  return kLiteRtStatusOk;
+}
+
+LiteRtStatus LiteRtGetTensorBufferGlBuffer(LiteRtTensorBuffer tensor_buffer,
+                                           GLenum* target, GLuint* id,
+                                           size_t* bytes_size, size_t* offset) {
+  if (!tensor_buffer || !target || !id) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+
+  auto gl_buffer_expected = tensor_buffer->GetGlBuffer();
+  if (!gl_buffer_expected) {
+    LITERT_LOG(LITERT_ERROR, "%s",
+               gl_buffer_expected.Error().Message().c_str());
+    return gl_buffer_expected.Error().Status();
+  }
+  *target = (*gl_buffer_expected)->target();
+  *id = (*gl_buffer_expected)->id();
+  *bytes_size = (*gl_buffer_expected)->bytes_size();
+  *offset = (*gl_buffer_expected)->offset();
+  return kLiteRtStatusOk;
+}
+
+#endif  // LITERT_HAS_OPENGL_SUPPORT
 
 LiteRtStatus LiteRtCreateManagedTensorBuffer(
     LiteRtTensorBufferType buffer_type,

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("//tensorflow/lite/experimental/litert/build_common:litert_build_defs.bzl", "litert_dynamic_lib")
+load("//tensorflow/lite/experimental/litert/build_common:litert_build_defs.bzl", "copy_file", "litert_dynamic_lib")
 
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
@@ -43,7 +43,7 @@ litert_dynamic_lib(
     }),
     linkstatic = 1,
     shared_lib_name = "dispatch_api_so",
-    so_name = "libLiteRtDispatch.so",
+    so_name = "libLiteRtDispatch_GoogleTensor.so",
     tags = [
         # Don't build/test in OSS until Southbound is available.
         "nobuilder",
@@ -62,6 +62,20 @@ litert_dynamic_lib(
         "@com_google_absl//absl/container:node_hash_set",
         "@com_google_absl//absl/strings:string_view",
     ],
+)
+
+# This is cc_library target for `libLiteRtDispatch_GoogleTensor.so`.
+cc_library(
+    name = "dispatch_api_shared_lib",
+    srcs = [":dispatch_api_so"],
+    linkstatic = 1,
+)
+
+# Copies the shared library so that it is available for use in test data as libLiteRtDispatch_GoogleTensor.so.
+copy_file(
+    name = "copy_dispatch_api_so",
+    src = "//tensorflow/lite/experimental/litert/vendors/google_tensor/dispatch:dispatch_api_so",
+    target = "libLiteRtDispatch_GoogleTensor.so",
 )
 
 cc_test(
@@ -113,6 +127,7 @@ cc_test(
         "no_oss",
     ],
     deps = [
+        "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/types:span",
@@ -124,6 +139,5 @@ cc_test(
         "//tensorflow/lite/experimental/litert/test:common",
         "//tensorflow/lite/experimental/litert/test:simple_model_npu",
         "//tensorflow/lite/experimental/litert/vendors/c:litert_dispatch_c_api",
-        "@com_google_googletest//:gtest_main",
     ],
 )

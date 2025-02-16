@@ -21,7 +21,6 @@ package(
 
 cc_library(
     name = "apply_plugin",
-    testonly = 1,
     srcs = ["apply_plugin.cc"],
     hdrs = ["apply_plugin.h"],
     deps = [
@@ -69,6 +68,7 @@ cc_test(
         "//tensorflow/lite/experimental/litert/core:dispatch_op_schema",
         "//tensorflow/lite/experimental/litert/core/model",
         "//tensorflow/lite/experimental/litert/test:common",
+        "//tensorflow/lite/experimental/litert/test:matchers",
         "@com_google_absl//absl/log:absl_check",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_googletest//:gtest_main",
@@ -77,7 +77,6 @@ cc_test(
 
 litert_cc_bin_with_qnn(
     name = "apply_plugin_main",
-    testonly = 1,
     srcs = ["apply_plugin_main.cc"],
     data = [
         "//tensorflow/lite/experimental/litert/vendors/examples:example_plugin_so",

@@ -27,6 +27,7 @@ RUN /setup.python.sh python3.9 /builder.requirements.txt
 RUN /setup.python.sh python3.10 /builder.requirements.txt
 RUN /setup.python.sh python3.11 /builder.requirements.txt
 RUN /setup.python.sh python3.13 /builder.requirements.txt
+RUN /setup.python.sh python3.13-nogil /builder.requirements.txt
 
 # Since we are using python3.12 as the default python version, we need to
 # install python3.12 last for now.

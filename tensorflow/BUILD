@@ -106,7 +106,7 @@ PACKAGE_STATIC_DEPS = [
     "@local_config_tensorrt//:__subpackages__",
     "@local_execution_config_platform//:__subpackages__",
     "@mkl_dnn_acl_compatible//:__subpackages__",
-    "@ml_dtypes//:__subpackages__",
+    "@ml_dtypes_py//ml_dtypes:__subpackages__",
     "@nccl_archive//:__subpackages__",
     "@nvtx_archive//:__subpackages__",
     "@onednn//:__subpackages__",
@@ -895,6 +895,14 @@ config_setting(
 config_setting(
     name = "litert_prefixes",
     define_values = {"litert_prefixes": "external/org_tensorflow/"},
+    visibility = ["//visibility:public"],
+)
+
+# This flag disables generating tensorflow.lite.python under LiteRT repo.
+# Avoid using flag for creating tflite wheels as tensorflow/lite is not yet fully splitted from tf.
+config_setting(
+    name = "disable_tf_lite_py",
+    define_values = {"disable_tf_lite_py": "true"},
     visibility = ["//visibility:public"],
 )
 
@@ -1714,7 +1722,13 @@ generate_apis(
     output_dir = "_api/v2/",
     output_files = TENSORFLOW_API_INIT_FILES_V2,
     output_package = "tensorflow._api.v2",
-    packages_to_ignore = ["tensorflow.python.framework.test_ops"],
+    packages_to_ignore = select({
+        ":disable_tf_lite_py": [
+            "tensorflow.python.framework.test_ops",
+            "tensorflow.lite",
+        ],
+        "//conditions:default": ["tensorflow.python.framework.test_ops"],
+    }),
     root_file_name = "v2.py",
     root_init_template = "api_template.__init__.py",
     visibility = ["//visibility:public"],
