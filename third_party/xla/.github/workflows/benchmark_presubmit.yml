@@ -42,20 +42,6 @@ jobs:
       matrix:
         job_info: [
           {
-            pool: "linux-x86-n2-16",
-            container: "us-central1-docker.pkg.dev/tensorflow-sigs/tensorflow/ml-build:latest",
-            pretty_name: "XLA Linux x86 CPU 16 vcpu Presubmit",
-            bazel_arch_dir: "k8-opt",
-            platform: "CPU"
-          },
-          {
-            pool: "linux-arm64-c4a-16",
-            container: "us-central1-docker.pkg.dev/tensorflow-sigs/tensorflow/ml-build-arm64:latest",
-            pretty_name: "XLA Linux ARM64 CPU 16 vcpu Presubmit",
-            bazel_arch_dir: "aarch64-opt",
-            platform: "CPU"
-          },
-          {
             pool: "linux-x86-n2-128",
             container: "us-central1-docker.pkg.dev/tensorflow-sigs/tensorflow/ml-build:latest",
             pretty_name: "XLA Linux x86 CPU 128 vcpu Presubmit",
@@ -64,8 +50,8 @@ jobs:
           },
           {
             pool: "linux-x86-g2-16-l4-1gpu",
-            container: "us-central1-docker.pkg.dev/tensorflow-sigs/tensorflow/ml-build:latest",
-            pretty_name: "XLA Linux x86 GPU T4 16 vcpu Presubmit",
+            container: "us-central1-docker.pkg.dev/tensorflow-sigs/tensorflow/ml-build-cuda12.8-cudnn9.8:latest",
+            pretty_name: "XLA Linux x86 GPU L4 16 vcpu Presubmit",
             bazel_arch_dir: "k8-opt",
             platform: "GPU"
           },
@@ -76,15 +62,8 @@ jobs:
     defaults:
       run:
         shell: bash
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
-      - name: Print machine specs
-        run: |
-          lscpu
-          free -h  # Memory information
-          df -h    # Disk space information
-          uname -a # Kernel information
-
       - name: Print GitHub Context
         run: |
           echo "GitHub SHA: ${{ github.sha }}"
@@ -107,6 +86,11 @@ jobs:
       - name: Checkout OpenXLA
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
+      - name: Configure GPU backend
+        if: ${{ matrix.job_info.platform == 'GPU' }}
+        run: |
+          ./configure.py --backend=CUDA --cuda_compiler=nvcc
+
       - name: "Run build.py"
         run: |
           ./build_tools/ci/build.py --build="${{ matrix.job_info.pretty_name }}_github_actions"
@@ -127,7 +111,7 @@ jobs:
             binary_path="./bazel-out/${bazel_arch_dir}/bin/xla/tools/multihost_hlo_runner/hlo_runner_main_gpu"
             test_hlo_file="xla/tools/hlo_opt/tests/gpu_hlo_backend.hlo"
             echo "Running GPU test with binary: $binary_path"
-            $binary_path --device_type=gpu --log_output=True --use_spmd_partitioning --profile_execution=True  $test_hlo_file
+            $binary_path --device_type=gpu --use_spmd_partitioning --profile_execution=True  $test_hlo_file
           else
             echo "Unsupported platform: ${{ matrix.job_info.platform }}"
             exit 1

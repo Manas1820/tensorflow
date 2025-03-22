@@ -827,7 +827,7 @@ PjRtStreamExecutorClient::BufferFromHostBufferInternal(
         device_shape,
         transfer_manager->ChooseCompactLayoutForShape(device_shape));
   }
-  absl::InlinedVector<int64_t, 4> shape_strides(device_shape.rank());
+  absl::InlinedVector<int64_t, 4> shape_strides(device_shape.dimensions_size());
   TF_RETURN_IF_ERROR(
       ShapeUtil::ByteStrides(device_shape, absl::MakeSpan(shape_strides)));
   bool host_and_device_strides_equal =
@@ -1896,7 +1896,8 @@ PjRtStreamExecutorBuffer::CopyToDeviceMemorySpace(
     TF_ASSIGN_OR_RETURN(std::shared_ptr<Literal> literal, ToLiteralSync());
     // Avoid use-after-free on `literal` due to unsequenced move and use.
     Literal* literal_pointer = literal.get();
-    absl::InlinedVector<int64_t, 4> byte_strides(literal->shape().rank());
+    absl::InlinedVector<int64_t, 4> byte_strides(
+        literal->shape().dimensions_size());
     TF_RETURN_IF_ERROR(
         ShapeUtil::ByteStrides(literal->shape(), absl::MakeSpan(byte_strides)));
     return dst_device->client()->BufferFromHostBuffer(
@@ -2079,7 +2080,7 @@ absl::Status CheckCompatibleShapes(bool strict_shape_checking,
   // shape `pred[0]`.
   if (execution_shape.IsToken() &&
       buffer_on_device_shape.element_type() == PrimitiveType::PRED &&
-      buffer_on_device_shape.rank() == 1 &&
+      buffer_on_device_shape.dimensions_size() == 1 &&
       buffer_on_device_shape.dimensions(0) == 0) {
     return absl::OkStatus();
   }
@@ -3700,8 +3701,9 @@ absl::StatusOr<std::string> PjRtStreamExecutorClient::SerializeExecutable(
 }
 
 absl::StatusOr<std::unique_ptr<PjRtLoadedExecutable>>
-PjRtStreamExecutorClient::DeserializeExecutable(
-    absl::string_view serialized, std::optional<CompileOptions> options) {
+PjRtStreamExecutorClient::LoadSerializedExecutable(
+    absl::string_view serialized, std::optional<CompileOptions> options,
+    const LoadOptions& load_options) {
   ExecutableAndOptionsProto proto;
   if (serialized.size() > std::numeric_limits<int>::max()) {
     return Internal(
@@ -3754,13 +3756,6 @@ PjRtStreamExecutorClient::DeserializeExecutable(
   TF_RETURN_IF_ERROR(
       executable->SetUpDonation(compile_options.parameter_is_tupled_arguments));
   return std::unique_ptr<PjRtLoadedExecutable>(std::move(executable));
-}
-
-absl::StatusOr<std::unique_ptr<PjRtLoadedExecutable>>
-PjRtStreamExecutorClient::LoadSerializedExecutable(
-    absl::string_view serialized, std::optional<CompileOptions> options,
-    const LoadOptions& load_options) {
-  return DeserializeExecutable(serialized, options);
 }
 
 bool PjRtStreamExecutorClient::IsDmaMapped(const void* data_start,

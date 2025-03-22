@@ -3,7 +3,7 @@ load(
     "if_rocm_is_configured",
 )
 load(
-    "//xla:xla.bzl",
+    "//xla:xla.default.bzl",
     "xla_cc_binary",
     "xla_cc_test",
 )
@@ -70,6 +70,7 @@ cc_library(
         "//xla/ffi:execution_context",
         "//xla/ffi:type_id_registry",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings:string_view",
     ],
 )
 

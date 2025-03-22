@@ -1,4 +1,4 @@
-load("//xla:xla.bzl", "xla_cc_test")
+load("//xla:xla.default.bzl", "xla_cc_test")
 load("//xla/pjrt/cpu:package_groups.bzl", "xla_cpu_internal_packages")
 load("//xla/tsl:tsl.bzl", "internal_visibility")
 load("//xla/tsl/platform:rules_cc.bzl", "cc_library")
@@ -24,15 +24,15 @@ xla_cc_test(
 )
 
 cc_library(
-    name = "tracked_tfrt_cpu_device_buffer",
-    srcs = ["tracked_tfrt_cpu_device_buffer.cc"],
-    hdrs = ["tracked_tfrt_cpu_device_buffer.h"],
+    name = "tracked_cpu_device_buffer",
+    srcs = ["tracked_cpu_device_buffer.cc"],
+    hdrs = ["tracked_cpu_device_buffer.h"],
     visibility =
         internal_visibility(["//xla/pjrt/cpu:legacy_cpu_buffer_internal_users"]),
     deps = [
-        "//xla:cpu_function_runtime",
         "//xla:shape_util",
         "//xla:util",
+        "//xla/backends/cpu:alignment",
         "//xla/service/cpu:cpu_event",
         "//xla/tsl/concurrency:async_value",
         "//xla/tsl/platform:statusor",
@@ -49,10 +49,10 @@ cc_library(
 )
 
 xla_cc_test(
-    name = "tracked_tfrt_cpu_device_buffer_test",
-    srcs = ["tracked_tfrt_cpu_device_buffer_test.cc"],
+    name = "tracked_cpu_device_buffer_test",
+    srcs = ["tracked_cpu_device_buffer_test.cc"],
     deps = [
-        ":tracked_tfrt_cpu_device_buffer",
+        ":tracked_cpu_device_buffer",
         "//xla:util",
         "//xla/service/cpu:cpu_event",
         "//xla/tsl/concurrency:async_value",
@@ -68,7 +68,7 @@ cc_library(
     hdrs = ["abstract_tfrt_cpu_buffer.h"],
     visibility = internal_visibility(["//xla/pjrt/cpu:legacy_cpu_buffer_internal_users"]),
     deps = [
-        ":tracked_tfrt_cpu_device_buffer",
+        ":tracked_cpu_device_buffer",
         "//xla:cpu_function_runtime",
         "//xla:literal",
         "//xla:shape_tree",
@@ -143,7 +143,7 @@ cc_library(
         ":abstract_tfrt_cpu_buffer",
         ":cpu_device",
         ":tfrt_cpu_async_execution_tracker",
-        ":tracked_tfrt_cpu_device_buffer",
+        ":tracked_cpu_device_buffer",
         "//xla:array",
         "//xla:cpu_function_runtime",
         "//xla:debug_options_flags",
@@ -164,6 +164,7 @@ cc_library(
         "//xla/client:executable_build_options",
         "//xla/hlo/builder:xla_computation",
         "//xla/hlo/ir:hlo",
+        "//xla/hlo/ir:hlo_module_group",
         "//xla/pjrt:compile_options_proto_cc",
         "//xla/pjrt:host_callback",
         "//xla/pjrt:host_memory_spaces",
@@ -211,6 +212,7 @@ cc_library(
         "@com_google_absl//absl/base",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/base:dynamic_annotations",
+        "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:inlined_vector",
         "@com_google_absl//absl/functional:any_invocable",

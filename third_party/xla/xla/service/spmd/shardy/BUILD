@@ -1,6 +1,6 @@
 # Integrates Shardy into the current XLA pipeline.
 
-load("//xla:xla.bzl", "xla_cc_binary", "xla_cc_test", "xla_internal")
+load("//xla:xla.default.bzl", "xla_cc_binary", "xla_cc_test", "xla_internal")
 load("//xla/tsl:tsl.bzl", "internal_visibility")
 load("//xla/tsl/platform:rules_cc.bzl", "cc_library")
 
@@ -76,6 +76,7 @@ cc_library(
     deps = [
         ":constants",
         "//xla/mlir_hlo",
+        "//xla/service/spmd/shardy/extensions:mhlo_extensions",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/strings",
         "@llvm-project//llvm:Support",
@@ -118,11 +119,13 @@ xla_cc_binary(
     name = "sdy_opt",
     srcs = ["sdy_opt_main.cc"],
     deps = [
+        "//xla/mlir_hlo",
         "//xla/mlir_hlo:stablehlo_extension_passes",
+        "//xla/service/spmd/shardy/extensions:mhlo_extensions",
         "//xla/service/spmd/shardy/round_trip_common:export_named_computations",
-        "//xla/service/spmd/shardy/round_trip_common:import_backend_func_calls",
         "//xla/service/spmd/shardy/round_trip_common:import_constants",
         "//xla/service/spmd/shardy/round_trip_common:import_sdy_custom_calls",
+        "//xla/service/spmd/shardy/round_trip_common:import_uninlineable_func_calls",
         "//xla/service/spmd/shardy/round_trip_common:open_while_free_vars_sharding",
         "//xla/service/spmd/shardy/sdy_round_trip:dedup_meshes",
         "//xla/service/spmd/shardy/sdy_round_trip:export_ops",

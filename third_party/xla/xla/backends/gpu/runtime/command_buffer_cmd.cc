@@ -1612,7 +1612,7 @@ absl::Status CollectiveCmd::Prepare(
       GpuCliqueKey clique_key,
       GetGpuCliqueKey(collectives, *params.collective_params,
                       config().replica_groups, config().group_mode,
-                      nccl_stream_id(), GetAsyncStreamKind()));
+                      GetAsyncStreamKind()));
   TF_ASSIGN_OR_RETURN(
       size_t num_local_participants,
       GetNumLocalParticipants(*params.collective_params,
@@ -1682,7 +1682,7 @@ absl::Status AllReduceCmd::Record(const Thunk::ExecuteParams& execute_params,
       CommunicatorHandle comm_handle,
       GetComm(collectives, *execute_params.collective_params,
               *execute_params.collective_cliques, config().replica_groups,
-              config().group_mode, nccl_stream_id(), GetAsyncStreamKind()));
+              config().group_mode, GetAsyncStreamKind()));
 
   return AddTracedCommandBuffer(
       execute_params, record_params, command_buffer, [&](se::Stream* stream) {
@@ -1749,7 +1749,7 @@ absl::Status ReduceScatterCmd::Record(
       CommunicatorHandle comm_handle,
       GetComm(collectives, *execute_params.collective_params,
               *execute_params.collective_cliques, config().replica_groups,
-              config().group_mode, nccl_stream_id(), GetAsyncStreamKind()));
+              config().group_mode, GetAsyncStreamKind()));
 
   return AddTracedCommandBuffer(
       execute_params, record_params, command_buffer, [&](se::Stream* stream) {
@@ -1813,7 +1813,7 @@ absl::Status AllToAllCmd::Record(const Thunk::ExecuteParams& execute_params,
       CommunicatorHandle comm_handle,
       GetComm(collectives, *execute_params.collective_params,
               *execute_params.collective_cliques, config().replica_groups,
-              config().group_mode, nccl_stream_id(), GetAsyncStreamKind()));
+              config().group_mode, GetAsyncStreamKind()));
 
   return AddTracedCommandBuffer(
       execute_params, record_params, command_buffer, [&](se::Stream* stream) {
@@ -1876,7 +1876,7 @@ absl::Status AllGatherCmd::Record(const Thunk::ExecuteParams& execute_params,
       CommunicatorHandle comm_handle,
       GetComm(collectives, *execute_params.collective_params,
               *execute_params.collective_cliques, config().replica_groups,
-              config().group_mode, nccl_stream_id(), GetAsyncStreamKind()));
+              config().group_mode, GetAsyncStreamKind()));
 
   return AddTracedCommandBuffer(
       execute_params, record_params, command_buffer, [&](se::Stream* stream) {
@@ -1941,7 +1941,7 @@ absl::Status CollectiveBroadcastCmd::Record(
       CommunicatorHandle comm_handle,
       GetComm(collectives, *execute_params.collective_params,
               *execute_params.collective_cliques, config().replica_groups,
-              config().group_mode, nccl_stream_id(), GetAsyncStreamKind()));
+              config().group_mode, GetAsyncStreamKind()));
 
   return AddTracedCommandBuffer(
       execute_params, record_params, command_buffer, [&](se::Stream* stream) {
@@ -1998,7 +1998,8 @@ DynamicSliceFusionCmd::DynamicSliceFusionCmd(
   for (DynamicSliceThunk::SliceDef& slice : slices_) {
     offsets_allocs_base_.push_back(offsets_allocs_size_);
     if (slice.sliced_shape.has_value()) {
-      offsets_allocs_size_ += slice.sliced_shape->rank() * sizeof(int64_t);
+      offsets_allocs_size_ +=
+          slice.sliced_shape->dimensions_size() * sizeof(int64_t);
     }
   }
 }
@@ -2045,8 +2046,10 @@ absl::Status DynamicSliceFusionCmd::Prepare(
       TF_RET_CHECK(slice.orig_shape->IsArray());
       TF_RET_CHECK(slice.sliced_shape->IsArray());
 
-      TF_RET_CHECK(slice.offsets->size() == slice.orig_shape->rank());
-      TF_RET_CHECK(slice.sliced_shape->rank() == slice.orig_shape->rank());
+      TF_RET_CHECK(slice.offsets->size() ==
+                   slice.orig_shape->dimensions_size());
+      TF_RET_CHECK(slice.sliced_shape->dimensions_size() ==
+                   slice.orig_shape->dimensions_size());
     }
   }
   TF_RETURN_IF_ERROR(embedded_commands_->Prepare(params, resource_requests));
@@ -2097,14 +2100,14 @@ absl::Status DynamicSliceFusionCmd::Record(
     const Shape& dst_shape = *slice.sliced_shape;
 
     absl::InlinedVector<int64_t, 4> slice_starts;
-    slice_starts.reserve(dst_shape.rank());
+    slice_starts.reserve(dst_shape.dimensions_size());
 
     // Number of issues d2h transfers to copy offset values from device to
     // host.
     int64_t num_transfers = 0;
 
-    // Get offset for `argument_idx`-th argument, which has `dst_shape.rank()`
-    // components.
+    // Get offset for `argument_idx`-th argument, which has
+    // `dst_shape.dimensions_size()` components.
     for (auto [offset_idx, values] : llvm::enumerate(llvm::zip(
              *slice.offsets, src_shape.dimensions(), dst_shape.dimensions()))) {
       auto [offset, src_dim, dst_dim] = values;

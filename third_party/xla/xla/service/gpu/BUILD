@@ -8,7 +8,7 @@ load(
     "if_rocm_is_configured",
     "rocm_copts",
 )
-load("//xla:xla.bzl", "xla_cc_test", "xla_internal")
+load("//xla:xla.default.bzl", "xla_cc_test", "xla_internal")
 load(
     "//xla/service/gpu:build_defs.bzl",
     "build_cub_sort_kernels",
@@ -1274,7 +1274,6 @@ cc_library(
         "//xla/service:dump",
         "//xla/service:hlo_proto_cc",
         "//xla/service:logical_buffer",
-        "//xla/service/llvm_ir:llvm_command_line_options",
         "//xla/stream_executor:device_description",
         "//xla/stream_executor:platform",
         "//xla/stream_executor/cuda:cuda_compute_capability",
@@ -1285,12 +1284,12 @@ cc_library(
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",
-        "@com_google_absl//absl/log:globals",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
         "@llvm-project//llvm:AsmParser",
+        "@llvm-project//llvm:TargetParser",
         "@llvm-project//llvm:TransformUtils",
         "@llvm-project//llvm:ir_headers",
         "@llvm-project//mlir:IR",
@@ -1507,6 +1506,7 @@ cc_library(
         "//xla/service/gpu/transforms/collectives:gpu_all_reduce_combiner",
         "//xla/service/gpu/transforms/collectives:gpu_collective_combiner_utils",
         "//xla/service/gpu/transforms/collectives:gpu_reduce_scatter_combiner",
+        "//xla/service/gpu/transforms:add_tracking_suffix_to_instruction_names",
         "//xla/service/gpu/transforms:algebraic_simplifier",
         "//xla/service/gpu/transforms:algorithm_checker",
         "//xla/service/gpu/transforms:all_gather_dynamic_slice_simplifier",
@@ -1647,7 +1647,7 @@ cc_library(
     ]) + xla_internal(["service:export_hlo"]) + if_google([
         "//xla/hlo/experimental/auto_sharding",
         "//xla/hlo/experimental/auto_sharding:auto_sharding_option",
-    ]),
+    ]) + ["@llvm-project//llvm:TargetParser"],
 )
 
 xla_test(

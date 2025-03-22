@@ -864,7 +864,8 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitDotThunk(
   }
 
   DotImplementationStrategy strategy = GetDotImplementationStrategy(
-      hlo_module_config_, *instruction, target_machine_features_);
+      hlo_module_config_, *instruction, target_machine_features_,
+      /*allow_runtime_calls=*/true);
 
   switch (strategy) {
     // Emit host kernel implementing dot instruction.
@@ -939,7 +940,7 @@ absl::StatusOr<ThunkSequence> ThunkEmitter::EmitTopKThunk(
 
   // Deduce parameters from the result shape and operand shape
   const int64_t input_size = input->shape().dimensions().back();
-  const bool has_batch = result_shape.tuple_shapes(0).rank() == 2;
+  const bool has_batch = result_shape.tuple_shapes(0).dimensions_size() == 2;
   const int64_t batch_size =
       has_batch ? result_shape.tuple_shapes(0).dimensions(0) : 1;
   const int64_t k = result_shape.tuple_shapes(0).dimensions().back();
