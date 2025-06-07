@@ -83,6 +83,31 @@ const float kConstantClampData = 0.f;
 
 constexpr char kOdmlSDPA[] = "odml.scaled_dot_product_attention";
 
+// Use this to create a maybe unique_ptr that owns its data.
+auto kOwned = [](auto* v) { delete v; };
+// Use this to create a maybe unique_ptr that doesn't its data.
+auto kNotOwned = [](auto* v) {};
+
+// May or may not own the data that it points to.
+//
+// This works exactly as a unique_ptr but has the possibility of not handling
+// its data.
+//
+// This is used to simplify management of data that may be passed from outside
+template <class T>
+struct maybe_unique_ptr : private std::unique_ptr<T, void (*)(T*)> {
+  using std::unique_ptr<T, void (*)(T*)>::unique_ptr;
+  using std::unique_ptr<T, void (*)(T*)>::operator->;
+  using std::unique_ptr<T, void (*)(T*)>::operator*;
+  using std::unique_ptr<T, void (*)(T*)>::get;
+  using std::unique_ptr<T, void (*)(T*)>::release;
+  // Note: reset is not exposed because the deleter can't be changed with it,
+  // making it less obvious what the ownership is.
+
+  // Returns true if the data is managed by the smart pointer.
+  bool owning() const { return this->get_deleter() != kNotOwned; }
+};
+
 template <typename T>
 void SafeCopyCustomData(const TfLiteNode& node, T* target) {
   const size_t safe_size =
@@ -589,8 +614,17 @@ class Delegate {
 
     // If no weight cache is provided, add one when requested.
     if (!options_.weights_cache) {
-      if (options_.weight_cache_file_path ||
-          options_.weight_cache_file_descriptor > 0) {
+      // Use a manually provided weight cache provider.
+      if (options_.weight_cache_provider) {
+        weight_cache_provider_ = maybe_unique_ptr<MMapWeightCacheProvider>(
+            reinterpret_cast<MMapWeightCacheProvider*>(
+                options_.weight_cache_provider),
+            kNotOwned);
+      }
+      // Try to setup the cache provider if necessary.
+      if (!weight_cache_provider_->IsActive() &&
+          (options_.weight_cache_file_path ||
+           options_.weight_cache_file_descriptor > 0)) {
         const char* const file_path = options_.weight_cache_file_path
                                           ? options_.weight_cache_file_path
                                           : "unknown path";
@@ -599,20 +633,28 @@ class Delegate {
         FileDescriptor fd(options_.weight_cache_file_descriptor > 0
                               ? options_.weight_cache_file_descriptor
                               : -1);
-        if (weight_cache_provider_.LoadOrStartBuild(file_path, std::move(fd))) {
-          options_.weights_cache =
-              reinterpret_cast<TfLiteXNNPackDelegateWeightsCache*>(
-                  weight_cache_provider_.GetCacheProvider().context);
-          options_.weight_cache_file_path =
-              weight_cache_provider_.GetFilePath().data();
-        } else {
+        if (!weight_cache_provider_->LoadOrStartBuild(file_path,
+                                                      std::move(fd))) {
           TFLITE_LOG_PROD(tflite::TFLITE_LOG_ERROR,
                           "XNNPack weight cache could neither be loaded from "
                           "or saved to '%s'. Check that this location is "
                           "readable and writable.",
                           options_.weight_cache_file_path);
-          options_.weight_cache_file_path = nullptr;
         }
+      } else if (!weight_cache_provider_->IsActive() &&
+                 !weight_cache_provider_.owning()) {
+        TFLITE_LOG_PROD(
+            tflite::TFLITE_LOG_ERROR,
+            "XNNPack weight cache was manually overridden but not loaded and "
+            "no file path or file descriptor was provided.");
+      }
+      // Configure the delegate to use the cache provider.
+      if (weight_cache_provider_->IsActive()) {
+        options_.weights_cache =
+            reinterpret_cast<TfLiteXNNPackDelegateWeightsCache*>(
+                weight_cache_provider_->GetCacheProvider().context);
+        options_.weight_cache_file_path =
+            weight_cache_provider_->GetFilePath().data();
       } else {
         TFLITE_LOG(tflite::TFLITE_LOG_VERBOSE,
                    "XNNPack weight cache not enabled.");
@@ -686,6 +728,11 @@ class Delegate {
                            "is deprecated and will be removed in the future.");
     }
     return true;
+  }
+
+  bool consistent_arithmetic() const {
+    return (options_.flags &
+            TFLITE_XNNPACK_DELEGATE_FLAG_SLOW_CONSISTENT_ARITHMETIC) != 0;
   }
 
   bool transient_indirection_buffer() const {
@@ -787,7 +834,8 @@ class Delegate {
 
   // If no weight cache is provided and a cache is set in the delegate options,
   // this will be used as a weight cache.
-  MMapWeightCacheProvider weight_cache_provider_;
+  maybe_unique_ptr<MMapWeightCacheProvider> weight_cache_provider_{
+      new MMapWeightCacheProvider(), kOwned};
 
   // A map of `f16`->`f32` dequantization tensor indices that will be skipped in
   // the XNNPACK subgraph.
@@ -844,8 +892,8 @@ class Subgraph {
       subgraph_index = this_subgraph->GetSubgraphIndex();
     }
     // Map tensors identifiers before packing anything.
-    if (delegate.weight_cache_provider_.IsActive()) {
-      delegate.weight_cache_provider_.MapTensorIdentifiers(
+    if (delegate.weight_cache_provider_->IsActive()) {
+      delegate.weight_cache_provider_->MapTensorIdentifiers(
           context->tensors, context->tensors_size,
           reinterpret_cast<tflite::Subgraph*>(context->impl_)
               ->GetTensorBufferIdentifiers());
@@ -1119,6 +1167,9 @@ class Subgraph {
     if (delegate.transient_indirection_buffer()) {
       flags |= XNN_FLAG_TRANSIENT_INDIRECTION_BUFFER;
     }
+    if (delegate.consistent_arithmetic()) {
+      flags |= XNN_FLAG_SLOW_CONSISTENT_ARITHMETIC;
+    }
     if (delegate.force_fp16()) {
       flags |= XNN_FLAG_FORCE_FP16_INFERENCE;
     } else {
@@ -1150,9 +1201,9 @@ class Subgraph {
     }
     flags |= delegate.runtime_flags();
 
-    if (delegate.weight_cache_provider_.IsActive() &&
-        delegate.weight_cache_provider_.CanStartBuildStep()) {
-      if (!delegate.weight_cache_provider_.StartBuildStep()) {
+    if (delegate.weight_cache_provider_->IsActive() &&
+        delegate.weight_cache_provider_->CanStartBuildStep()) {
+      if (!delegate.weight_cache_provider_->StartBuildStep()) {
         TF_LITE_KERNEL_LOG(
             context, "XNNPack delegate failed to start cache build step.");
         return nullptr;
@@ -1161,9 +1212,9 @@ class Subgraph {
     status = xnn_create_runtime_v4(subgraph.get(), delegate.weights_cache(),
                                    delegate.workspace(), delegate.threadpool(),
                                    flags, &runtime_ptr);
-    if (delegate.weight_cache_provider_.IsActive() &&
-        delegate.weight_cache_provider_.CanStartBuildStep()) {
-      if (!delegate.weight_cache_provider_.StopBuildStep()) {
+    if (delegate.weight_cache_provider_->IsActive() &&
+        delegate.weight_cache_provider_->CanStartBuildStep()) {
+      if (!delegate.weight_cache_provider_->StopBuildStep()) {
         TF_LITE_KERNEL_LOG(context,
                            "XNNPack delegate failed to stop cache build step.");
         return nullptr;
@@ -7014,7 +7065,7 @@ TfLiteIntArray* Delegate::PrepareOpsToDelegate(TfLiteContext* context) {
         static_unpacked_input_it != static_unpacked_data.end()
             ? static_unpacked_input_it->second.data()
             : static_cast<const char*>(input_tensor.data.data);
-    weight_cache_provider_.RemapDataBuffer(packed_data, unpacked_data);
+    weight_cache_provider_->RemapDataBuffer(packed_data, unpacked_data);
   }
 
   // Add nodes that unpack static data consumed by delegated nodes.
